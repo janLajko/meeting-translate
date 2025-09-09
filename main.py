@@ -63,7 +63,7 @@ async def stream(ws: WebSocket):
                 print("[Backend] WebSocket disconnect received")
                 break
             if "bytes" in msg and msg["bytes"]:
-                print(f"[Backend] Received audio data: {len(msg['bytes'])} bytes")
+                # print(f"[Backend] Received audio data: {len(msg['bytes'])} bytes")
                 stt.push(msg["bytes"])
             elif "text" in msg and msg["text"] == "PING":
                 print("[Backend] Received PING, sending PONG")

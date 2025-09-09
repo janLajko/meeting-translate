@@ -73,20 +73,40 @@ async function stop() {
 
 // 处理来自offscreen document的消息
 chrome.runtime.onMessage.addListener((message) => {
+  if (message.type === 'OFFSCREEN_LOG') {
+    // 显示来自offscreen的日志
+    const logPrefix = `[Background->Offscreen] [${message.level.toUpperCase()}]`;
+    if (message.level === 'error') {
+      console.error(logPrefix, message.message, message.data || '');
+    } else if (message.level === 'warn') {
+      console.warn(logPrefix, message.message, message.data || '');
+    } else if (message.level === 'success') {
+      console.log(`%c${logPrefix} ${message.message}`, 'color: green', message.data || '');
+    } else {
+      console.log(logPrefix, message.message, message.data || '');
+    }
+    return;
+  }
+  
   console.log('[Background] Received message:', message);
   
   if (message.type === 'CAPTURE_STARTED') {
+    console.log('[Background] ✅ Capture started successfully!');
     portOpen = true;
     chrome.action.setBadgeText({ text: "ON" });
     chrome.action.setBadgeBackgroundColor({ color: "#2ea043" });
-  } else if (message.type === 'CAPTURE_STOPPED' || message.type === 'CAPTURE_ERROR') {
+  } else if (message.type === 'CAPTURE_STOPPED') {
+    console.log('[Background] ⚠️ Capture stopped');
     portOpen = false;
     chrome.action.setBadgeText({ text: "" });
-    if (message.type === 'CAPTURE_ERROR') {
-      console.error('[Background] Capture error:', message.error);
-    }
+  } else if (message.type === 'CAPTURE_ERROR') {
+    console.error('[Background] ❌ Capture error:', message.error);
+    portOpen = false;
+    chrome.action.setBadgeText({ text: "ERR" });
+    chrome.action.setBadgeBackgroundColor({ color: "#d73a49" });
   } else if (message.type === 'SUBTITLE_DATA') {
     // 转发字幕数据到content script
+    console.log('[Background] 📝 Received subtitle data');
     if (currentTabId) {
       try {
         const data = JSON.parse(message.data);

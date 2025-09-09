@@ -16,6 +16,12 @@
     ],
     "action": {
       "default_title": "Start/Stop Subtitles"
-    }
+    },
+    "web_accessible_resources": [
+      {
+        "resources": ["pcm-worklet.js"],
+        "matches": ["<all_urls>"]
+      }
+    ]
 }
   

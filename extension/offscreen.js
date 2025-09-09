@@ -1,96 +1,104 @@
 let ws = null;
 let audioCtx, workletNode;
 
-// AudioWorklet：重采样到16k，输出Int16 PCM
-const WORKLET_PROCESSOR_CODE = `
-class PCM16KWriter extends AudioWorkletProcessor {
-  constructor() {
-    super();
-    this._ratio = sampleRate / 16000;
-    this._samplesPerChunk = Math.round(16000 * 0.2); // 200ms
-    this._acc = [];
-  }
-  _resample(input) {
-    const outLen = Math.floor(input.length / this._ratio);
-    const out = new Float32Array(outLen);
-    let idx = 0, pos = 0;
-    while (idx < outLen) {
-      out[idx++] = input[Math.floor(pos)];
-      pos += this._ratio;
-    }
-    return out;
-  }
-  _floatTo16BitPCM(float32) {
-    const buf = new ArrayBuffer(float32.length * 2);
-    const view = new DataView(buf);
-    for (let i = 0; i < float32.length; i++) {
-      let s = Math.max(-1, Math.min(1, float32[i]));
-      view.setInt16(i*2, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
-    }
-    return buf;
-  }
-  process(inputs) {
-    const ch = inputs[0][0];
-    if (!ch) return true;
-    const resampled = this._resample(ch);
-    this._acc.push(...resampled);
-    while (this._acc.length >= this._samplesPerChunk) {
-      const chunk = this._acc.slice(0, this._samplesPerChunk);
-      this._acc = this._acc.slice(this._samplesPerChunk);
-      const buf = this._floatTo16BitPCM(Float32Array.from(chunk));
-      this.port.postMessage(buf, [buf]);
-    }
-    return true;
-  }
+// 辅助函数：发送日志到background
+function sendLog(level, message, data = null) {
+  console.log(`[Offscreen] ${message}`, data || '');
+  chrome.runtime.sendMessage({ 
+    type: 'OFFSCREEN_LOG', 
+    level, 
+    message,
+    data: data ? JSON.stringify(data) : null
+  });
 }
-registerProcessor('pcm16k-writer', PCM16KWriter);
-`;
 
 chrome.runtime.onMessage.addListener(async (message, sender, sendResponse) => {
-  console.log('[Offscreen] Received message:', message);
+  sendLog('info', 'Received message:', message);
   
   if (message.type === 'START_CAPTURE') {
     try {
-      console.log('[Offscreen] Starting audio capture with streamId:', message.streamId);
+      sendLog('info', 'Starting audio capture with streamId:', message.streamId);
       
-      // 获取音频流
-      const audioStream = await navigator.mediaDevices.getUserMedia({
+      // 检查navigator.mediaDevices支持
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        throw new Error('getUserMedia not supported');
+      }
+      sendLog('info', 'getUserMedia is supported');
+      
+      const constraints = {
         audio: {
           mandatory: {
             chromeMediaSource: 'tab',
             chromeMediaSourceId: message.streamId
           }
         }
-      });
-      console.log('[Offscreen] Audio capture successful');
+      };
+      sendLog('info', 'Attempting getUserMedia with constraints:', constraints);
+      
+      // 获取音频流
+      const audioStream = await navigator.mediaDevices.getUserMedia(constraints);
+      sendLog('success', 'Audio capture successful!');
+      
+      const audioTracks = audioStream.getAudioTracks();
+      sendLog('info', `Got ${audioTracks.length} audio tracks`);
+      if (audioTracks.length > 0) {
+        sendLog('info', 'First audio track settings:', audioTracks[0].getSettings());
+      }
       
       // 连接WebSocket - 支持本地和Cloud Run部署
       const wsUrl = location.hostname === 'localhost' 
-        ? "wss://meeting-translate-1019079553349.asia-east2.run.app/stream"
-        : "wss://meeting-translate-1019079553349.asia-east2.run.app/stream";  // 替换为你的Cloud Run URL
+        ? "ws://localhost:8080/stream"
+        : "wss://meeting-translate-1019079553349.asia-east2.run.app/stream";
+      sendLog('info', 'Connecting to WebSocket:', wsUrl);
       ws = new WebSocket(wsUrl);
       ws.binaryType = "arraybuffer";
       
       ws.onopen = async () => {
-        console.log('[Offscreen] WebSocket connected');
+        sendLog('success', 'WebSocket connected successfully!');
         
-        audioCtx = new AudioContext({ sampleRate: 48000 });
-        await audioCtx.audioWorklet.addModule(URL.createObjectURL(new Blob([WORKLET_PROCESSOR_CODE], {type:"application/javascript"})));
-        
-        const src = audioCtx.createMediaStreamSource(audioStream);
-        workletNode = new AudioWorkletNode(audioCtx, "pcm16k-writer");
-        workletNode.port.onmessage = (e) => {
-          console.log('[Offscreen] Sending audio data, size:', e.data.byteLength);
-          if (ws && ws.readyState === 1) ws.send(e.data);
-        };
-        src.connect(workletNode).connect(audioCtx.destination);
-        
-        // 通知background script启动成功
-        chrome.runtime.sendMessage({ type: 'CAPTURE_STARTED' });
+        try {
+          sendLog('info', 'Creating AudioContext...');
+          audioCtx = new AudioContext({ sampleRate: 48000 });
+          sendLog('info', 'AudioContext created, state:', audioCtx.state);
+          
+          sendLog('info', 'Loading AudioWorklet module...');
+          const workletUrl = chrome.runtime.getURL('pcm-worklet.js');
+          sendLog('info', 'AudioWorklet URL:', workletUrl);
+          await audioCtx.audioWorklet.addModule(workletUrl);
+          sendLog('success', 'AudioWorklet module loaded successfully');
+          
+          sendLog('info', 'Creating audio processing pipeline...');
+          const src = audioCtx.createMediaStreamSource(audioStream);
+          workletNode = new AudioWorkletNode(audioCtx, "pcm16k-writer");
+          
+          let audioDataCount = 0;
+          workletNode.port.onmessage = (e) => {
+            audioDataCount++;
+            if (audioDataCount <= 5 || audioDataCount % 50 === 0) {
+              sendLog('info', `Sending audio data #${audioDataCount}, size: ${e.data.byteLength} bytes`);
+            }
+            if (ws && ws.readyState === 1) {
+              ws.send(e.data);
+            } else {
+              sendLog('warn', 'WebSocket not ready, readyState:', ws?.readyState);
+            }
+          };
+          
+          src.connect(workletNode).connect(audioCtx.destination);
+          sendLog('success', 'Audio pipeline connected successfully!');
+          
+          // 通知background script启动成功
+          sendLog('info', 'Sending CAPTURE_STARTED message');
+          chrome.runtime.sendMessage({ type: 'CAPTURE_STARTED' });
+          
+        } catch (audioError) {
+          sendLog('error', 'Audio setup failed:', audioError.message);
+          chrome.runtime.sendMessage({ type: 'CAPTURE_ERROR', error: audioError.message });
+        }
       };
       
       ws.onmessage = (evt) => {
-        console.log('[Offscreen] Received message from server:', evt.data);
+        sendLog('info', 'Received message from server:', evt.data);
         // 转发到background script
         chrome.runtime.sendMessage({ 
           type: 'SUBTITLE_DATA', 
@@ -99,18 +107,18 @@ chrome.runtime.onMessage.addListener(async (message, sender, sendResponse) => {
         });
       };
       
-      ws.onclose = () => {
-        console.log('[Offscreen] WebSocket closed');
+      ws.onclose = (evt) => {
+        sendLog('warn', 'WebSocket closed, code:', evt.code, 'reason:', evt.reason);
         chrome.runtime.sendMessage({ type: 'CAPTURE_STOPPED' });
       };
       
       ws.onerror = (error) => {
-        console.error('[Offscreen] WebSocket error:', error);
-        chrome.runtime.sendMessage({ type: 'CAPTURE_ERROR', error: error.message });
+        sendLog('error', 'WebSocket error:', error);
+        chrome.runtime.sendMessage({ type: 'CAPTURE_ERROR', error: 'WebSocket connection failed' });
       };
       
     } catch (error) {
-      console.error('[Offscreen] Failed to start capture:', error);
+      sendLog('error', 'Failed to start capture:', error.message);
       chrome.runtime.sendMessage({ type: 'CAPTURE_ERROR', error: error.message });
     }
   } else if (message.type === 'STOP_CAPTURE') {
