@@ -101,7 +101,7 @@ class GoogleSTTStream:
     def _run_stream(self) -> None:
         """建立一次流；若达到时长上限则自然结束（需要外层重建以实现长会）。"""
         try:
-            # 创建配置
+            # 创建配置（按照官方示例）
             config = speech.RecognitionConfig(
                 encoding=ASR_ENCODING,
                 sample_rate_hertz=ASR_SAMPLE_RATE,
@@ -116,7 +116,7 @@ class GoogleSTTStream:
                 single_utterance=False,
             )
             
-            # 创建只包含音频数据的请求迭代器
+            # 创建只包含音频数据的请求迭代器（按照官方示例）
             def audio_requests():
                 last_flush = time.time()
                 while not self._closed:
@@ -138,11 +138,8 @@ class GoogleSTTStream:
                         time.sleep(0.01)
                         last_flush = now
             
-            # 正确的API调用方式：分别传递config和requests参数
-            responses = self._client.streaming_recognize(
-                config=streaming_config, 
-                requests=audio_requests()
-            )
+            # 按照官方示例的正确API调用方式：两个位置参数
+            responses = self._client.streaming_recognize(streaming_config, audio_requests())
             
             for resp in responses:
                 if not resp.results:
