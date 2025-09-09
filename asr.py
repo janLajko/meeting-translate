@@ -101,11 +101,48 @@ class GoogleSTTStream:
     def _run_stream(self) -> None:
         """建立一次流；若达到时长上限则自然结束（需要外层重建以实现长会）。"""
         try:
-            # 使用原来的_request_iter方法，但修复API调用
-            request_iterator = self._request_iter()
+            # 创建配置
+            config = speech.RecognitionConfig(
+                encoding=ASR_ENCODING,
+                sample_rate_hertz=ASR_SAMPLE_RATE,
+                language_code=self._language,
+                alternative_language_codes=self._alt_langs,
+                enable_automatic_punctuation=True,
+                model="latest_long",
+            )
+            streaming_config = speech.StreamingRecognitionConfig(
+                config=config,
+                interim_results=True,
+                single_utterance=False,
+            )
             
-            # 正确的API调用方式：使用requests关键字参数
-            responses = self._client.streaming_recognize(requests=request_iterator)
+            # 创建只包含音频数据的请求迭代器
+            def audio_requests():
+                last_flush = time.time()
+                while not self._closed:
+                    chunk = None
+                    with self._lock:
+                        if self._chunks:
+                            chunk = self._chunks.pop(0)
+
+                    if chunk:
+                        yield speech.StreamingRecognizeRequest(audio_content=chunk)
+
+                    # 软重置条件：接近上限时结束本次流
+                    if (time.time() - self._start_ts) > self._max_seconds:
+                        break
+
+                    # 简单节流，避免忙等
+                    now = time.time()
+                    if now - last_flush > 0.02:
+                        time.sleep(0.01)
+                        last_flush = now
+            
+            # 正确的API调用方式：分别传递config和requests参数
+            responses = self._client.streaming_recognize(
+                config=streaming_config, 
+                requests=audio_requests()
+            )
             
             for resp in responses:
                 if not resp.results:
