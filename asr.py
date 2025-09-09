@@ -142,17 +142,26 @@ class GoogleSTTStream:
             responses = self._client.streaming_recognize(streaming_config, audio_requests())
             
             for resp in responses:
+                print(f"[GoogleSTTStream] Received response: {resp}")
                 if not resp.results:
+                    print(f"[GoogleSTTStream] No results in response")
                     continue
                 result = resp.results[0]
+                print(f"[GoogleSTTStream] Result: is_final={result.is_final}, alternatives={len(result.alternatives)}")
                 if not result.alternatives:
+                    print(f"[GoogleSTTStream] No alternatives in result")
                     continue
                 text = result.alternatives[0].transcript.strip()
+                confidence = result.alternatives[0].confidence if hasattr(result.alternatives[0], 'confidence') else 'N/A'
+                print(f"[GoogleSTTStream] Text: '{text}', confidence: {confidence}")
                 if not text:
+                    print(f"[GoogleSTTStream] Empty text, skipping")
                     continue
                 if result.is_final:
+                    print(f"[GoogleSTTStream] Final result: {text}")
                     self._on_final(text)
                 else:
+                    print(f"[GoogleSTTStream] Partial result: {text}")
                     self._on_partial(text)
         except Exception as e:
             # 生产上建议打日志或上报
