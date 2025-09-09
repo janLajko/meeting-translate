@@ -4,7 +4,8 @@ import time
 import threading
 from typing import Callable, Optional, Iterable
 
-from google.cloud import speech_v1 as speech
+from google.cloud.speech_v2 import SpeechClient
+from google.cloud.speech_v2.types import cloud_speech as speech
 
 # 说明：输入必须是 16kHz、LINEAR16、单声道 PCM（与扩展发送的数据一致）
 ASR_SAMPLE_RATE = 16000
@@ -25,7 +26,7 @@ class GoogleSTTStream:
         alt_langs: Optional[list[str]] = None,
         max_stream_seconds: int = 230,   # 约 3分50秒，防止被动断流
     ) -> None:
-        self._client = speech.SpeechClient()
+        self._client = SpeechClient()
         self._on_partial = on_partial
         self._on_final = on_final
         self._language = language
@@ -101,24 +102,30 @@ class GoogleSTTStream:
     def _run_stream(self) -> None:
         """建立一次流；若达到时长上限则自然结束（需要外层重建以实现长会）。"""
         try:
-            # 创建流配置
-            streaming_config = speech.StreamingRecognitionConfig(
-                config=speech.RecognitionConfig(
-                    encoding=ASR_ENCODING,
-                    sample_rate_hertz=ASR_SAMPLE_RATE,
-                    language_code=self._language,
-                    alternative_language_codes=self._alt_langs,
+            # 创建v2 API配置
+            config = speech.RecognitionConfig(
+                auto_decoding_config=speech.AutoDetectDecodingConfig(),
+                language_codes=[self._language] + self._alt_langs,
+                model="latest_long",
+                features=speech.RecognitionFeatures(
                     enable_automatic_punctuation=True,
-                    model="latest_long",
                 ),
-                interim_results=True,
-                single_utterance=False,
+            )
+            
+            streaming_config = speech.StreamingRecognitionConfig(
+                config=config,
+                streaming_features=speech.StreamingRecognitionFeatures(
+                    interim_results=True,
+                ),
             )
             
             # 创建音频请求迭代器
             def audio_requests():
                 # 第一个请求包含配置
-                yield speech.StreamingRecognizeRequest(streaming_config=streaming_config)
+                yield speech.StreamingRecognizeRequest(
+                    recognizer="projects/_/locations/global/recognizers/_",
+                    streaming_config=streaming_config
+                )
                 
                 # 后续请求包含音频数据
                 last_flush = time.time()
@@ -129,7 +136,7 @@ class GoogleSTTStream:
                             chunk = self._chunks.pop(0)
 
                     if chunk:
-                        yield speech.StreamingRecognizeRequest(audio_content=chunk)
+                        yield speech.StreamingRecognizeRequest(audio=chunk)
 
                     # 软重置条件：接近上限时结束本次流
                     if (time.time() - self._start_ts) > self._max_seconds:
@@ -141,8 +148,8 @@ class GoogleSTTStream:
                         time.sleep(0.01)
                         last_flush = now
             
-            # 使用正确的API调用方式
-            responses = self._client.streaming_recognize(audio_requests())
+            # 使用v2 API调用方式
+            responses = self._client.streaming_recognize(requests=audio_requests())
             
             for resp in responses:
                 if not resp.results:
