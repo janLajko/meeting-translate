@@ -101,18 +101,48 @@ class GoogleSTTStream:
     def _run_stream(self) -> None:
         """建立一次流；若达到时长上限则自然结束（需要外层重建以实现长会）。"""
         try:
-            # 创建请求迭代器
-            request_iterator = self._request_iter()
+            # 创建流配置
+            streaming_config = speech.StreamingRecognitionConfig(
+                config=speech.RecognitionConfig(
+                    encoding=ASR_ENCODING,
+                    sample_rate_hertz=ASR_SAMPLE_RATE,
+                    language_code=self._language,
+                    alternative_language_codes=self._alt_langs,
+                    enable_automatic_punctuation=True,
+                    model="latest_long",
+                ),
+                interim_results=True,
+                single_utterance=False,
+            )
             
-            # 尝试不同的API调用方式
-            try:
-                # 方式1: 使用requests参数
-                responses = self._client.streaming_recognize(requests=request_iterator)
-            except TypeError as te:
-                print(f"[GoogleSTTStream] Method 1 failed: {te}")
-                # 方式2: 直接传递迭代器作为位置参数
-                request_iterator = self._request_iter()  # 重新创建迭代器
-                responses = self._client.streaming_recognize(request_iterator)
+            # 创建音频请求迭代器
+            def audio_requests():
+                # 第一个请求包含配置
+                yield speech.StreamingRecognizeRequest(streaming_config=streaming_config)
+                
+                # 后续请求包含音频数据
+                last_flush = time.time()
+                while not self._closed:
+                    chunk = None
+                    with self._lock:
+                        if self._chunks:
+                            chunk = self._chunks.pop(0)
+
+                    if chunk:
+                        yield speech.StreamingRecognizeRequest(audio_content=chunk)
+
+                    # 软重置条件：接近上限时结束本次流
+                    if (time.time() - self._start_ts) > self._max_seconds:
+                        break
+
+                    # 简单节流，避免忙等
+                    now = time.time()
+                    if now - last_flush > 0.02:
+                        time.sleep(0.01)
+                        last_flush = now
+            
+            # 使用正确的API调用方式
+            responses = self._client.streaming_recognize(audio_requests())
             
             for resp in responses:
                 if not resp.results:
