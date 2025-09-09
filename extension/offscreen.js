@@ -66,8 +66,8 @@ chrome.runtime.onMessage.addListener(async (message, sender, sendResponse) => {
       
       // 连接WebSocket - 支持本地和Cloud Run部署
       const wsUrl = location.hostname === 'localhost' 
-        ? "ws://localhost:8080/stream"
-        : "wss://your-cloud-run-url.run.app/stream";  // 替换为你的Cloud Run URL
+        ? "wss://meeting-translate-1019079553349.asia-east2.run.app/stream"
+        : "wss://meeting-translate-1019079553349.asia-east2.run.app/stream";  // 替换为你的Cloud Run URL
       ws = new WebSocket(wsUrl);
       ws.binaryType = "arraybuffer";
       

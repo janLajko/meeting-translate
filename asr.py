@@ -101,7 +101,10 @@ class GoogleSTTStream:
     def _run_stream(self) -> None:
         """建立一次流；若达到时长上限则自然结束（需要外层重建以实现长会）。"""
         try:
-            responses = self._client.streaming_recognize(self._request_iter())
+            # 正确的API调用方式
+            request_generator = self._request_iter()
+            responses = self._client.streaming_recognize(requests=request_generator)
+            
             for resp in responses:
                 if not resp.results:
                     continue
