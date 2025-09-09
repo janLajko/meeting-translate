@@ -104,8 +104,8 @@ class GoogleSTTStream:
             # 使用原来的_request_iter方法，但修复API调用
             request_iterator = self._request_iter()
             
-            # 正确的v1 API调用方式：将迭代器作为第一个位置参数传递
-            responses = self._client.streaming_recognize(request_iterator)
+            # 正确的API调用方式：使用requests关键字参数
+            responses = self._client.streaming_recognize(requests=request_iterator)
             
             for resp in responses:
                 if not resp.results:
