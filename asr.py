@@ -101,9 +101,18 @@ class GoogleSTTStream:
     def _run_stream(self) -> None:
         """建立一次流；若达到时长上限则自然结束（需要外层重建以实现长会）。"""
         try:
-            # 正确的API调用方式
-            request_generator = self._request_iter()
-            responses = self._client.streaming_recognize(requests=request_generator)
+            # 创建请求迭代器
+            request_iterator = self._request_iter()
+            
+            # 尝试不同的API调用方式
+            try:
+                # 方式1: 使用requests参数
+                responses = self._client.streaming_recognize(requests=request_iterator)
+            except TypeError as te:
+                print(f"[GoogleSTTStream] Method 1 failed: {te}")
+                # 方式2: 直接传递迭代器作为位置参数
+                request_iterator = self._request_iter()  # 重新创建迭代器
+                responses = self._client.streaming_recognize(request_iterator)
             
             for resp in responses:
                 if not resp.results:
@@ -121,5 +130,7 @@ class GoogleSTTStream:
         except Exception as e:
             # 生产上建议打日志或上报
             print(f"[GoogleSTTStream] error: {e}")
+            import traceback
+            print(f"[GoogleSTTStream] traceback: {traceback.format_exc()}")
         finally:
             self._closed = True
