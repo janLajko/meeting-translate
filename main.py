@@ -50,22 +50,17 @@ async def stream(ws: WebSocket):
         # 将消息添加到队列而不是立即发送
         message_queue.append(('send', data))
 
-    # ASR 回调 - 优化翻译逻辑
+    # ASR 回调 - 优化翻译逻辑，只发送翻译后的Final结果
     def on_partial(text: str):
         print(f"[Backend] ✅ ASR partial result received: '{text}' (length: {len(text)})")
-        if len(text.strip()) > 0:
-            # Partial结果直接显示英文，不进行翻译
-            send_payload(text, text, False)
-        else:
-            print(f"[Backend] Partial text is empty, not processing")
+        # 不发送Partial结果到前端，只记录日志
+        if len(text.strip()) == 0:
+            print(f"[Backend] Partial text is empty")
 
     def on_final(text: str):
         print(f"[Backend] ✅ ASR final result received: '{text}' (length: {len(text)})")
         if len(text.strip()) > 0:
-            # Final结果：立即发送英文，然后异步翻译
-            send_payload(text, text, True)  # 先发送英文结果
-            
-            # 将翻译任务添加到消息队列，由主事件循环处理
+            # Final结果：直接进行异步翻译，不先发送英文
             message_queue.append(('translate', text))
         else:
             print(f"[Backend] Final text is empty, not processing")

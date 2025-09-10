@@ -1,5 +1,7 @@
 let portOpen = false;
 let currentTabId = null;
+let contentScriptReady = false;
+let messageQueue = []; // 缓存等待发送的字幕消息
 
 // 点击扩展图标启停
 chrome.action.onClicked.addListener(async (tab) => {
@@ -21,6 +23,53 @@ chrome.action.onClicked.addListener(async (tab) => {
   }
 });
 
+// 检查content script是否就绪
+async function checkContentScript(tabId) {
+  console.log('[Background] Checking content script readiness for tab:', tabId);
+  
+  try {
+    const response = await chrome.tabs.sendMessage(tabId, { 
+      type: "PING" 
+    });
+    
+    if (response && response.type === "PONG") {
+      console.log('[Background] ✅ Content script is ready');
+      contentScriptReady = true;
+      return true;
+    }
+  } catch (error) {
+    console.log('[Background] ❌ Content script not ready:', error.message);
+    contentScriptReady = false;
+  }
+  
+  return false;
+}
+
+// 注入content script
+async function injectContentScript(tabId) {
+  console.log('[Background] Injecting content script into tab:', tabId);
+  
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId: tabId },
+      files: ['content.js']
+    });
+    
+    // 等待一秒让content script初始化
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    
+    const isReady = await checkContentScript(tabId);
+    if (isReady) {
+      console.log('[Background] ✅ Content script injected and ready');
+      return true;
+    }
+  } catch (error) {
+    console.error('[Background] ❌ Failed to inject content script:', error);
+  }
+  
+  return false;
+}
+
 async function start(tabId) {
   console.log('[Background] Starting capture for tab:', tabId);
   
@@ -33,6 +82,22 @@ async function start(tabId) {
       mutedInfo: tab.mutedInfo,
       status: tab.status
     });
+    
+    // 检查并确保content script就绪
+    console.log('[Background] 🔍 Ensuring content script is ready...');
+    let isContentReady = await checkContentScript(tabId);
+    
+    if (!isContentReady) {
+      console.log('[Background] 💉 Content script not ready, attempting injection...');
+      isContentReady = await injectContentScript(tabId);
+      
+      if (!isContentReady) {
+        console.error('[Background] ❌ Failed to prepare content script');
+        chrome.action.setBadgeText({ text: "ERR" });
+        chrome.action.setBadgeBackgroundColor({ color: "#d73a49" });
+        return;
+      }
+    }
     
     // 获取stream ID
     const streamId = await chrome.tabCapture.getMediaStreamId({
@@ -71,6 +136,79 @@ async function start(tabId) {
   }
 }
 
+// 发送字幕消息到content script
+async function sendSubtitleMessage(data) {
+  console.log('[Background] 📤 Preparing to send subtitle:', data);
+  
+  if (!currentTabId) {
+    console.warn('[Background] ⚠️ No current tab ID, caching message');
+    messageQueue.push(data);
+    return;
+  }
+  
+  if (!contentScriptReady) {
+    console.log('[Background] 📦 Content script not ready, checking and caching message');
+    messageQueue.push(data);
+    
+    // 尝试重新建立连接
+    const isReady = await checkContentScript(currentTabId);
+    if (isReady) {
+      console.log('[Background] 🔄 Content script reconnected, processing queue');
+      await processMessageQueue();
+    }
+    return;
+  }
+  
+  try {
+    await chrome.tabs.sendMessage(currentTabId, { 
+      type: "SUBTITLE_UPDATE", 
+      payload: data 
+    });
+    console.log('[Background] ✅ Subtitle message sent successfully');
+  } catch (error) {
+    console.error('[Background] ❌ Failed to send subtitle message:', error);
+    console.error('[Background] Tab ID:', currentTabId);
+    
+    // 标记content script为未就绪
+    contentScriptReady = false;
+    
+    // 缓存消息并尝试重新建立连接
+    messageQueue.push(data);
+    console.log('[Background] 📦 Message cached, attempting reconnection...');
+    
+    setTimeout(async () => {
+      if (await checkContentScript(currentTabId) || await injectContentScript(currentTabId)) {
+        await processMessageQueue();
+      }
+    }, 1000);
+  }
+}
+
+// 处理消息队列
+async function processMessageQueue() {
+  if (messageQueue.length === 0 || !contentScriptReady) return;
+  
+  console.log('[Background] 🔄 Processing message queue, items:', messageQueue.length);
+  
+  const queue = [...messageQueue]; // 创建副本
+  messageQueue = []; // 清空队列
+  
+  for (const data of queue) {
+    try {
+      await chrome.tabs.sendMessage(currentTabId, { 
+        type: "SUBTITLE_UPDATE", 
+        payload: data 
+      });
+      console.log('[Background] ✅ Queued message sent:', data.en?.substring(0, 30) + '...');
+    } catch (error) {
+      console.error('[Background] ❌ Failed to send queued message:', error);
+      // 重新添加到队列
+      messageQueue.unshift(data);
+      break;
+    }
+  }
+}
+
 async function stop() {
   console.log('[Background] Stopping capture');
   
@@ -90,6 +228,8 @@ async function stop() {
   
   portOpen = false;
   currentTabId = null;
+  contentScriptReady = false;
+  messageQueue = []; // 清空消息队列
   chrome.action.setBadgeText({ text: "" });
 }
 
@@ -128,17 +268,26 @@ chrome.runtime.onMessage.addListener((message) => {
     chrome.action.setBadgeBackgroundColor({ color: "#d73a49" });
   } else if (message.type === 'SUBTITLE_DATA') {
     // 转发字幕数据到content script
-    console.log('[Background] 📝 Received subtitle data');
-    if (currentTabId) {
-      try {
-        const data = JSON.parse(message.data);
-        chrome.tabs.sendMessage(currentTabId, { 
-          type: "SUBTITLE_UPDATE", 
-          payload: data 
-        });
-      } catch (error) {
-        console.error('[Background] Failed to parse subtitle data:', error);
-      }
+    console.log('[Background] 📝 Received subtitle data:', message.data);
+    
+    try {
+      const data = JSON.parse(message.data);
+      sendSubtitleMessage(data);
+    } catch (error) {
+      console.error('[Background] ❌ Failed to parse subtitle data:', error);
+      console.error('[Background] Raw data:', message.data);
     }
+  } else if (message.type === 'DEBUG_PING') {
+    // 处理来自content script的调试ping
+    console.log('[Background] 🐛 Received debug ping from content script');
+    return Promise.resolve({
+      type: 'DEBUG_PONG',
+      status: 'background_ready',
+      currentTabId: currentTabId,
+      contentScriptReady: contentScriptReady,
+      portOpen: portOpen,
+      messageQueueLength: messageQueue.length,
+      timestamp: Date.now()
+    });
   }
 });
