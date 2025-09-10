@@ -5,6 +5,8 @@ class PCM16KWriter extends AudioWorkletProcessor {
     this._ratio = sampleRate / 16000;
     this._samplesPerChunk = Math.round(16000 * 0.2); // 200ms
     this._acc = [];
+    this._chunkCount = 0;
+    this._totalRMS = 0;
   }
   
   _resample(input) {
@@ -28,6 +30,14 @@ class PCM16KWriter extends AudioWorkletProcessor {
     return buf;
   }
   
+  _calculateRMS(samples) {
+    let sum = 0;
+    for (let i = 0; i < samples.length; i++) {
+      sum += samples[i] * samples[i];
+    }
+    return Math.sqrt(sum / samples.length);
+  }
+  
   process(inputs) {
     const ch = inputs[0][0];
     if (!ch) return true;
@@ -38,7 +48,25 @@ class PCM16KWriter extends AudioWorkletProcessor {
     while (this._acc.length >= this._samplesPerChunk) {
       const chunk = this._acc.slice(0, this._samplesPerChunk);
       this._acc = this._acc.slice(this._samplesPerChunk);
+      
+      // 计算音频级别
+      const rms = this._calculateRMS(chunk);
+      this._totalRMS += rms;
+      this._chunkCount++;
+      
       const buf = this._floatTo16BitPCM(Float32Array.from(chunk));
+      
+      // 每50个chunk报告一次音频级别
+      if (this._chunkCount % 50 === 0) {
+        const avgRMS = this._totalRMS / 50;
+        this.port.postMessage({
+          type: 'audio_level',
+          rms: avgRMS,
+          chunkCount: this._chunkCount
+        });
+        this._totalRMS = 0; // 重置
+      }
+      
       this.port.postMessage(buf, [buf]);
     }
     

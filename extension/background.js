@@ -4,8 +4,12 @@ let currentTabId = null;
 // 点击扩展图标启停
 chrome.action.onClicked.addListener(async (tab) => {
   console.log('[Background] Icon clicked, tab URL:', tab.url);
-  if (!/gather\.town/.test(tab.url)) {
-    console.log('[Background] Not a Gather.town page, ignoring');
+  
+  // 支持Gather.town和YouTube (用于测试)
+  const supportedSites = /gather\.town|youtube\.com|youtu\.be/;
+  if (!supportedSites.test(tab.url)) {
+    console.log('[Background] Not a supported page, ignoring');
+    console.log('[Background] Supported: Gather.town, YouTube');
     return;
   }
   if (!portOpen) {
@@ -21,11 +25,29 @@ async function start(tabId) {
   console.log('[Background] Starting capture for tab:', tabId);
   
   try {
+    // 首先检查标签页的URL和状态
+    const tab = await chrome.tabs.get(tabId);
+    console.log('[Background] Tab info:', {
+      url: tab.url,
+      audible: tab.audible,
+      mutedInfo: tab.mutedInfo,
+      status: tab.status
+    });
+    
     // 获取stream ID
     const streamId = await chrome.tabCapture.getMediaStreamId({
       targetTabId: tabId
     });
     console.log('[Background] Got stream ID:', streamId);
+    
+    // 先尝试关闭现有的 offscreen document（如果存在）
+    try {
+      await chrome.offscreen.closeDocument();
+      console.log('[Background] Closed existing offscreen document');
+    } catch (error) {
+      // 如果没有现有的 document，这个错误是预期的
+      console.log('[Background] No existing offscreen document to close');
+    }
     
     // 创建offscreen document
     await chrome.offscreen.createDocument({

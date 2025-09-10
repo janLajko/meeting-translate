@@ -27,22 +27,70 @@ chrome.runtime.onMessage.addListener(async (message, sender, sendResponse) => {
       
       const constraints = {
         audio: {
-          mandatory: {
-            chromeMediaSource: 'tab',
-            chromeMediaSourceId: message.streamId
-          }
+          chromeMediaSource: 'tab',
+          chromeMediaSourceId: message.streamId
         }
       };
       sendLog('info', 'Attempting getUserMedia with constraints:', constraints);
       
-      // 获取音频流
-      const audioStream = await navigator.mediaDevices.getUserMedia(constraints);
+      // 获取音频流 - 添加更详细的错误处理
+      let audioStream;
+      try {
+        audioStream = await navigator.mediaDevices.getUserMedia(constraints);
+      } catch (getUserMediaError) {
+        sendLog('error', 'getUserMedia failed:', {
+          name: getUserMediaError.name,
+          message: getUserMediaError.message,
+          constraint: getUserMediaError.constraint
+        });
+        
+        // 尝试使用更简单的约束  
+        sendLog('info', 'Trying with mandatory constraints...');
+        const simpleConstraints = {
+          audio: {
+            mandatory: {
+              chromeMediaSource: 'tab',
+              chromeMediaSourceId: message.streamId
+            }
+          }
+        };
+        
+        try {
+          audioStream = await navigator.mediaDevices.getUserMedia(simpleConstraints);
+          sendLog('success', 'Audio capture successful with simplified constraints!');
+        } catch (retryError) {
+          sendLog('error', 'Retry also failed:', retryError.message);
+          throw retryError;
+        }
+      }
       sendLog('success', 'Audio capture successful!');
+      
+      // 详细检查音频流
+      sendLog('info', 'Audio stream details:', {
+        id: audioStream.id,
+        active: audioStream.active
+      });
       
       const audioTracks = audioStream.getAudioTracks();
       sendLog('info', `Got ${audioTracks.length} audio tracks`);
       if (audioTracks.length > 0) {
-        sendLog('info', 'First audio track settings:', audioTracks[0].getSettings());
+        const track = audioTracks[0];
+        const settings = track.getSettings();
+        const constraints = track.getConstraints();
+        sendLog('info', 'First audio track details:', {
+          label: track.label,
+          kind: track.kind,
+          enabled: track.enabled,
+          muted: track.muted,
+          readyState: track.readyState,
+          settings: settings,
+          constraints: constraints
+        });
+        
+        // 监听音频轨道状态变化
+        track.onended = () => sendLog('warn', 'Audio track ended');
+        track.onmute = () => sendLog('warn', 'Audio track muted');
+        track.onunmute = () => sendLog('info', 'Audio track unmuted');
       }
       
       // 连接WebSocket - 支持本地和Cloud Run部署
@@ -69,10 +117,52 @@ chrome.runtime.onMessage.addListener(async (message, sender, sendResponse) => {
           
           sendLog('info', 'Creating audio processing pipeline...');
           const src = audioCtx.createMediaStreamSource(audioStream);
+          
+          // 添加音频分析器来监控原始音频级别
+          const analyser = audioCtx.createAnalyser();
+          analyser.fftSize = 2048;
+          const dataArray = new Uint8Array(analyser.frequencyBinCount);
+          
+          src.connect(analyser);
+          
+          // 每秒检查一次原始音频级别
+          const checkAudioLevel = () => {
+            analyser.getByteFrequencyData(dataArray);
+            const average = dataArray.reduce((sum, value) => sum + value, 0) / dataArray.length;
+            sendLog('info', `Raw audio level from tab: ${average.toFixed(2)} (0-255 scale)`);
+            
+            if (average < 1) {
+              sendLog('warn', 'No audio detected from tab - check if Gather has audio enabled');
+            }
+            
+            setTimeout(checkAudioLevel, 1000);
+          };
+          checkAudioLevel();
+          
           workletNode = new AudioWorkletNode(audioCtx, "pcm16k-writer");
+          
+          // 创建音频分支：一路给worklet处理，一路输出到扬声器
+          const splitter = audioCtx.createChannelSplitter(1);
+          const merger = audioCtx.createChannelMerger(1);
+          
+          // 音频流：源 -> 分析器 -> 分离器 -> (worklet + 输出)
+          src.connect(splitter);
+          splitter.connect(workletNode, 0);  // 发送到worklet处理
+          splitter.connect(merger, 0, 0);    // 发送到输出
+          merger.connect(audioCtx.destination);  // 输出到扬声器
           
           let audioDataCount = 0;
           workletNode.port.onmessage = (e) => {
+            if (e.data.type === 'audio_level') {
+              // 处理音频级别消息
+              sendLog('info', `Audio level - RMS: ${e.data.rms.toFixed(4)}, Chunk: ${e.data.chunkCount}`);
+              if (e.data.rms < 0.001) {
+                sendLog('warn', 'Very low audio level detected - possible silence');
+              }
+              return;
+            }
+            
+            // 处理音频数据消息
             audioDataCount++;
             if (audioDataCount <= 5 || audioDataCount % 50 === 0) {
               sendLog('info', `Sending audio data #${audioDataCount}, size: ${e.data.byteLength} bytes`);
@@ -84,7 +174,6 @@ chrome.runtime.onMessage.addListener(async (message, sender, sendResponse) => {
             }
           };
           
-          src.connect(workletNode).connect(audioCtx.destination);
           sendLog('success', 'Audio pipeline connected successfully!');
           
           // 通知background script启动成功

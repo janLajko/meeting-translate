@@ -35,21 +35,34 @@ async def stream(ws: WebSocket):
             data = json.dumps({"en": en, "zh": zh, "isFinal": is_final}, ensure_ascii=False)
         except Exception:
             data = json.dumps({"en": en, "zh": zh, "isFinal": is_final})
-        # FastAPI 的 ws 是异步，这里用线程转异步
-        asyncio.run_coroutine_threadsafe(ws.send_text(data), asyncio.get_event_loop())
+        # 使用异步任务发送，避免事件循环错误
+        try:
+            loop = asyncio.get_running_loop()
+            asyncio.run_coroutine_threadsafe(ws.send_text(data), loop)
+        except RuntimeError:
+            # 如果没有运行中的事件循环，创建任务
+            asyncio.create_task(ws.send_text(data))
 
     # ASR 回调
     def on_partial(text: str):
-        print(f"[Backend] ASR partial result: '{text}'")
-        zh = translate_en_to_zh(text)
-        print(f"[Backend] Translation result: '{zh}'")
-        send_payload(text, zh, False)
+        print(f"[Backend] ✅ ASR partial result received: '{text}' (length: {len(text)})")
+        if len(text.strip()) > 0:
+            print(f"[Backend] Translating partial text: '{text}'")
+            zh = translate_en_to_zh(text)
+            print(f"[Backend] ✅ Partial translation result: '{text}' -> '{zh}'")
+            send_payload(text, zh, False)
+        else:
+            print(f"[Backend] Partial text is empty, not processing")
 
     def on_final(text: str):
-        print(f"[Backend] ASR final result: '{text}'")
-        zh = translate_en_to_zh(text)
-        print(f"[Backend] Translation result: '{zh}'")
-        send_payload(text, zh, True)
+        print(f"[Backend] ✅ ASR final result received: '{text}' (length: {len(text)})")
+        if len(text.strip()) > 0:
+            print(f"[Backend] Translating final text: '{text}'")
+            zh = translate_en_to_zh(text)
+            print(f"[Backend] ✅ Final translation result: '{text}' -> '{zh}'")
+            send_payload(text, zh, True)
+        else:
+            print(f"[Backend] Final text is empty, not processing")
 
     print("[Backend] Creating GoogleSTTStream...")
     stt = GoogleSTTStream(on_partial=on_partial, on_final=on_final)
@@ -63,8 +76,12 @@ async def stream(ws: WebSocket):
                 print("[Backend] WebSocket disconnect received")
                 break
             if "bytes" in msg and msg["bytes"]:
-                # print(f"[Backend] Received audio data: {len(msg['bytes'])} bytes")
-                stt.push(msg["bytes"])
+                bytes_len = len(msg['bytes'])
+                if bytes_len > 0:
+                    print(f"[Backend] 📡 Received audio data: {bytes_len} bytes, pushing to STT stream")
+                    stt.push(msg["bytes"])
+                else:
+                    print(f"[Backend] ⚠️ Received empty audio data")
             elif "text" in msg and msg["text"] == "PING":
                 print("[Backend] Received PING, sending PONG")
                 await ws.send_text("PONG")
