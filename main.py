@@ -6,7 +6,7 @@ from fastapi import FastAPI, WebSocket
 from fastapi.responses import PlainTextResponse
 from fastapi.middleware.cors import CORSMiddleware
 import asyncio
-from mock_asr import GoogleSTTStream  # Using mock for translation testing
+from asr import GoogleSTTStream  # Using mock for translation testing
 from translate import translate_en_to_zh_async
 
 app = FastAPI(title="Gather Subtitles Server (Python)")
