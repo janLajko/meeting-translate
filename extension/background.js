@@ -5,11 +5,11 @@ let currentTabId = null;
 chrome.action.onClicked.addListener(async (tab) => {
   console.log('[Background] Icon clicked, tab URL:', tab.url);
   
-  // 支持Gather.town和YouTube (用于测试)
-  const supportedSites = /gather\.town|youtube\.com|youtu\.be/;
+  // 支持Gather.town、YouTube和Zep.us
+  const supportedSites = /gather\.town|youtube\.com|youtu\.be|zep\.us/;
   if (!supportedSites.test(tab.url)) {
     console.log('[Background] Not a supported page, ignoring');
-    console.log('[Background] Supported: Gather.town, YouTube');
+    console.log('[Background] Supported: Gather.town, YouTube, Zep.us');
     return;
   }
   if (!portOpen) {

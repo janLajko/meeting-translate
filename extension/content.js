@@ -48,6 +48,19 @@ setTimeout(() => {
       });
     }
   }
+  
+  // Zep.us特殊处理
+  if (location.hostname.includes('zep.us')) {
+    console.log('[Content] Zep.us page detected');
+    // 检查Zep.us页面的音频元素
+    const audioElements = document.querySelectorAll('audio, video');
+    console.log(`[Content] Found ${audioElements.length} audio/video elements in Zep.us`);
+    
+    // 检查是否在游戏房间页面
+    if (location.pathname.includes('/play/')) {
+      console.log('[Content] Zep.us game room detected:', location.pathname);
+    }
+  }
 }, 3000);
 
 // 创建字幕容器

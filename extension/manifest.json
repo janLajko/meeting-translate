@@ -1,14 +1,14 @@
 {
     "manifest_version": 3,
-    "name": "Gather Live Subtitles (EN→ZH)",
+    "name": "Live Meeting Subtitles (EN→ZH)",
     "version": "0.1.0",
-    "description": "Capture audio from Gather tab, send to backend for STT+translation, overlay subtitles.",
+    "description": "Capture audio from meeting platforms (Gather.town, Zep.us, YouTube), send to backend for STT+translation, overlay subtitles.",
     "permissions": ["tabCapture", "activeTab", "scripting", "offscreen"],
     "host_permissions": ["*://*/*"],
     "background": { "service_worker": "background.js" },
     "content_scripts": [
       {
-        "matches": ["*://*.gather.town/*", "*://gather.town/*", "*://*.youtube.com/*", "*://youtube.com/*"],
+        "matches": ["*://*.gather.town/*", "*://gather.town/*", "*://*.youtube.com/*", "*://youtube.com/*", "*://*.zep.us/*", "*://zep.us/*"],
         "js": ["content.js"],
         "css": ["overlay.css"],
         "run_at": "document_idle"

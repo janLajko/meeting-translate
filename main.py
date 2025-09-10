@@ -6,8 +6,8 @@ from fastapi import FastAPI, WebSocket
 from fastapi.responses import PlainTextResponse
 from fastapi.middleware.cors import CORSMiddleware
 import asyncio
-from asr import GoogleSTTStream
-from translate import translate_en_to_zh
+from mock_asr import GoogleSTTStream  # Using mock for translation testing
+from translate import translate_en_to_zh_async
 
 app = FastAPI(title="Gather Subtitles Server (Python)")
 
@@ -48,30 +48,41 @@ async def stream(ws: WebSocket):
         except Exception:
             data = json.dumps({"en": en, "zh": zh, "isFinal": is_final})
         # 将消息添加到队列而不是立即发送
-        message_queue.append(data)
+        message_queue.append(('send', data))
 
-    # ASR 回调 - 暂时关闭翻译，专注识别速度测试
+    # ASR 回调 - 优化翻译逻辑
     def on_partial(text: str):
         print(f"[Backend] ✅ ASR partial result received: '{text}' (length: {len(text)})")
         if len(text.strip()) > 0:
-            # 暂时关闭翻译，直接发送英文结果
-            # print(f"[Backend] Translating partial text: '{text}'")
-            # zh = translate_en_to_zh(text)
-            # print(f"[Backend] ✅ Partial translation result: '{text}' -> '{zh}'")
-            send_payload(text, text, False)  # 暂时用英文作为中文结果
+            # Partial结果直接显示英文，不进行翻译
+            send_payload(text, text, False)
         else:
             print(f"[Backend] Partial text is empty, not processing")
 
     def on_final(text: str):
         print(f"[Backend] ✅ ASR final result received: '{text}' (length: {len(text)})")
         if len(text.strip()) > 0:
-            # 暂时关闭翻译，直接发送英文结果
-            # print(f"[Backend] Translating final text: '{text}'")
-            # zh = translate_en_to_zh(text)
-            # print(f"[Backend] ✅ Final translation result: '{text}' -> '{zh}'")
-            send_payload(text, text, True)  # 暂时用英文作为中文结果
+            # Final结果：立即发送英文，然后异步翻译
+            send_payload(text, text, True)  # 先发送英文结果
+            
+            # 将翻译任务添加到消息队列，由主事件循环处理
+            message_queue.append(('translate', text))
         else:
             print(f"[Backend] Final text is empty, not processing")
+
+    async def translate_and_update(text: str):
+        """异步翻译并更新结果"""
+        try:
+            print(f"[Backend] 🔄 Starting async translation for: '{text}'")
+            zh = await translate_en_to_zh_async(text)
+            print(f"[Backend] ✅ Async translation completed: '{text}' -> '{zh}'")
+            
+            # 发送翻译更新消息
+            data = json.dumps({"en": text, "zh": zh, "isFinal": True}, ensure_ascii=False)
+            message_queue.append(('send', data))
+        except Exception as e:
+            print(f"[Backend] ❌ Async translation failed: {e}")
+            # 翻译失败时保持英文显示，不发送更新
 
     print("[Backend] Creating GoogleSTTStream...")
     stt = None
@@ -127,14 +138,26 @@ async def stream(ws: WebSocket):
                             create_stt_stream()
                 last_health_check = now
             
-            # 检查并发送队列中的消息
+            # 检查并处理队列中的消息和翻译任务
             while message_queue:
                 try:
-                    data = message_queue.pop(0)
-                    await ws.send_text(data)
-                    print(f"[Backend] ✅ Sent queued message: {data}")
+                    item = message_queue.pop(0)
+                    if isinstance(item, tuple) and len(item) == 2:
+                        action, data = item
+                        if action == 'translate':
+                            # 启动异步翻译任务
+                            asyncio.create_task(translate_and_update(data))
+                            print(f"[Backend] 🔄 Started translation task for: '{data}'")
+                        elif action == 'send':
+                            # 发送消息
+                            await ws.send_text(data)
+                            print(f"[Backend] ✅ Sent translated message: {data}")
+                    else:
+                        # 普通消息
+                        await ws.send_text(item)
+                        print(f"[Backend] ✅ Sent queued message: {item}")
                 except Exception as send_error:
-                    print(f"[Backend] ❌ Failed to send queued message: {send_error}")
+                    print(f"[Backend] ❌ Failed to process queued item: {send_error}")
             
             # 使用短超时接收消息，避免阻塞消息发送
             try:
@@ -174,7 +197,7 @@ async def stream(ws: WebSocket):
                 elif "text" in msg and msg["text"] == "PING":
                     last_heartbeat = time.time()
                     print("[Backend] 💓 Received heartbeat PING, sending PONG")
-                    await ws.send_text("PONG")
+                    message_queue.append(('send', "PONG"))
                 else:
                     print(f"[Backend] Received unknown message type: {msg}")
             except asyncio.TimeoutError:
