@@ -36,9 +36,9 @@ async def stream(ws: WebSocket):
     # 存储要发送的消息队列
     message_queue = []
     
-    # 音频缓冲区 - 积累更多音频数据再发送给STT
-    audio_buffer = bytearray()
-    audio_buffer_size_threshold = 16000 * 2  # 32KB (约1秒音频数据)
+    # 移除音频缓冲区 - 改为即时处理以降低延迟
+    # audio_buffer = bytearray()
+    # audio_buffer_size_threshold = 16000 * 2  # 32KB (约1秒音频数据)
     
     # 发送字幕给前端（content.js 里会渲染）
     def send_payload(en: str, zh: str, is_final: bool):
@@ -50,24 +50,26 @@ async def stream(ws: WebSocket):
         # 将消息添加到队列而不是立即发送
         message_queue.append(data)
 
-    # ASR 回调
+    # ASR 回调 - 暂时关闭翻译，专注识别速度测试
     def on_partial(text: str):
         print(f"[Backend] ✅ ASR partial result received: '{text}' (length: {len(text)})")
         if len(text.strip()) > 0:
-            print(f"[Backend] Translating partial text: '{text}'")
-            zh = translate_en_to_zh(text)
-            print(f"[Backend] ✅ Partial translation result: '{text}' -> '{zh}'")
-            send_payload(text, zh, False)
+            # 暂时关闭翻译，直接发送英文结果
+            # print(f"[Backend] Translating partial text: '{text}'")
+            # zh = translate_en_to_zh(text)
+            # print(f"[Backend] ✅ Partial translation result: '{text}' -> '{zh}'")
+            send_payload(text, text, False)  # 暂时用英文作为中文结果
         else:
             print(f"[Backend] Partial text is empty, not processing")
 
     def on_final(text: str):
         print(f"[Backend] ✅ ASR final result received: '{text}' (length: {len(text)})")
         if len(text.strip()) > 0:
-            print(f"[Backend] Translating final text: '{text}'")
-            zh = translate_en_to_zh(text)
-            print(f"[Backend] ✅ Final translation result: '{text}' -> '{zh}'")
-            send_payload(text, zh, True)
+            # 暂时关闭翻译，直接发送英文结果
+            # print(f"[Backend] Translating final text: '{text}'")
+            # zh = translate_en_to_zh(text)
+            # print(f"[Backend] ✅ Final translation result: '{text}' -> '{zh}'")
+            send_payload(text, text, True)  # 暂时用英文作为中文结果
         else:
             print(f"[Backend] Final text is empty, not processing")
 
@@ -143,44 +145,30 @@ async def stream(ws: WebSocket):
                 if "bytes" in msg and msg["bytes"]:
                     bytes_len = len(msg['bytes'])
                     if bytes_len > 0:
-                        # 添加到音频缓冲区
-                        audio_buffer.extend(msg["bytes"])
+                        print(f"[Backend] 📡 Received audio data: {bytes_len} bytes, pushing to STT immediately")
                         
-                        # 当缓冲区达到阈值时，发送给STT
-                        if len(audio_buffer) >= audio_buffer_size_threshold:
-                            print(f"[Backend] 📡 Buffer reached threshold, sending {len(audio_buffer)} bytes to STT")
-                            
-                            # 检查STT流状态并推送数据
-                            if stt and stt.is_healthy():
-                                success = stt.push(bytes(audio_buffer))
-                                if success:
-                                    audio_buffer.clear()  # 清空缓冲区
-                                else:
-                                    print(f"[Backend] ⚠️ Failed to push audio data")
-                                    # 检查是否需要重建
-                                    if not stt.is_healthy() and should_rebuild_stt():
-                                        print(f"[Backend] 🔄 STT stream unhealthy, rebuilding...")
-                                        if create_stt_stream():
-                                            stt.push(bytes(audio_buffer))  # 重试推送
-                                            audio_buffer.clear()
-                            else:
-                                # STT流不健康或不存在，尝试重建
-                                if should_rebuild_stt():
-                                    if stt:
-                                        stats = stt.get_stats()
-                                        print(f"[Backend] 📊 STT stats before rebuild: {stats}")
-                                    
-                                    print(f"[Backend] 🔄 STT stream needs rebuild...")
+                        # 即时处理模式 - 直接发送给STT，无缓冲
+                        if stt and stt.is_healthy():
+                            success = stt.push(msg["bytes"])
+                            if not success:
+                                print(f"[Backend] ⚠️ Failed to push audio data")
+                                # 检查是否需要重建
+                                if not stt.is_healthy() and should_rebuild_stt():
+                                    print(f"[Backend] 🔄 STT stream unhealthy, rebuilding...")
                                     if create_stt_stream():
-                                        stt.push(bytes(audio_buffer))  # 重试推送
-                                        audio_buffer.clear()
-                                else:
-                                    print(f"[Backend] ❌ STT stream unavailable and max rebuilds reached")
-                                    audio_buffer.clear()  # 清空缓冲区避免无限增长
+                                        stt.push(msg["bytes"])  # 重试推送
                         else:
-                            # 显示缓冲区状态（降低频率）
-                            if len(audio_buffer) % 8000 == 0:  # 每8KB显示一次
-                                print(f"[Backend] 📊 Audio buffer: {len(audio_buffer)}/{audio_buffer_size_threshold} bytes")
+                            # STT流不健康或不存在，尝试重建
+                            if should_rebuild_stt():
+                                if stt:
+                                    stats = stt.get_stats()
+                                    print(f"[Backend] 📊 STT stats before rebuild: {stats}")
+                                
+                                print(f"[Backend] 🔄 STT stream needs rebuild...")
+                                if create_stt_stream():
+                                    stt.push(msg["bytes"])  # 重试推送
+                            else:
+                                print(f"[Backend] ❌ STT stream unavailable and max rebuilds reached")
                     else:
                         print(f"[Backend] ⚠️ Received empty audio data")
                 elif "text" in msg and msg["text"] == "PING":
