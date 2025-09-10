@@ -1,5 +1,14 @@
 let ws = null;
 let audioCtx, workletNode;
+let reconnectTimer = null;
+let reconnectAttempts = 0;
+let maxReconnectAttempts = 10;
+let reconnectDelay = 1000; // 开始1秒
+let audioBuffer = []; // 音频数据缓冲
+let maxBufferSize = 100; // 最大缓冲100个音频块
+let heartbeatTimer = null;
+let wsUrl = null;
+let currentStreamId = null;
 
 // 辅助函数：发送日志到background
 function sendLog(level, message, data = null) {
@@ -12,7 +21,153 @@ function sendLog(level, message, data = null) {
   });
 }
 
-chrome.runtime.onMessage.addListener(async (message, sender, sendResponse) => {
+// WebSocket连接管理
+function connectWebSocket() {
+  if (ws && (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN)) {
+    sendLog('warn', 'WebSocket already connecting or connected');
+    return;
+  }
+  
+  sendLog('info', `Connecting to WebSocket (attempt ${reconnectAttempts + 1}): ${wsUrl}`);
+  
+  try {
+    ws = new WebSocket(wsUrl);
+    ws.binaryType = "arraybuffer";
+    
+    ws.onopen = () => {
+      sendLog('success', 'WebSocket connected successfully!');
+      reconnectAttempts = 0;
+      reconnectDelay = 1000;
+      
+      // 清空重连定时器
+      if (reconnectTimer) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+      }
+      
+      // 开始心跳
+      startHeartbeat();
+      
+      // 发送缓冲的音频数据
+      flushAudioBuffer();
+      
+      chrome.runtime.sendMessage({ type: 'CAPTURE_STARTED' });
+    };
+    
+    ws.onmessage = (evt) => {
+      if (evt.data === 'PONG') {
+        sendLog('info', 'Received heartbeat PONG');
+        return;
+      }
+      
+      sendLog('info', 'Received message from server:', evt.data);
+      chrome.runtime.sendMessage({ 
+        type: 'SUBTITLE_DATA', 
+        data: evt.data, 
+        tabId: currentStreamId 
+      });
+    };
+    
+    ws.onclose = (evt) => {
+      sendLog('warn', `WebSocket closed, code: ${evt.code}, reason: ${evt.reason}`);
+      stopHeartbeat();
+      
+      if (evt.code !== 1000) { // 非正常关闭才重连
+        scheduleReconnect();
+      } else {
+        chrome.runtime.sendMessage({ type: 'CAPTURE_STOPPED' });
+      }
+    };
+    
+    ws.onerror = (error) => {
+      sendLog('error', 'WebSocket error:', error);
+      chrome.runtime.sendMessage({ type: 'CAPTURE_ERROR', error: 'WebSocket connection failed' });
+    };
+    
+  } catch (error) {
+    sendLog('error', 'Failed to create WebSocket:', error.message);
+    scheduleReconnect();
+  }
+}
+
+// 安排重连
+function scheduleReconnect() {
+  if (reconnectAttempts >= maxReconnectAttempts) {
+    sendLog('error', `Max reconnect attempts (${maxReconnectAttempts}) reached`);
+    chrome.runtime.sendMessage({ type: 'CAPTURE_ERROR', error: 'Connection failed after multiple attempts' });
+    return;
+  }
+  
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer);
+  }
+  
+  reconnectAttempts++;
+  sendLog('warn', `Scheduling reconnect in ${reconnectDelay}ms (attempt ${reconnectAttempts}/${maxReconnectAttempts})`);
+  
+  reconnectTimer = setTimeout(() => {
+    connectWebSocket();
+  }, reconnectDelay);
+  
+  // 指数退避，最大30秒
+  reconnectDelay = Math.min(reconnectDelay * 2, 30000);
+}
+
+// 心跳机制
+function startHeartbeat() {
+  stopHeartbeat();
+  heartbeatTimer = setInterval(() => {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send('PING');
+      sendLog('info', 'Sent heartbeat PING');
+    }
+  }, 30000); // 每30秒发送心跳
+}
+
+function stopHeartbeat() {
+  if (heartbeatTimer) {
+    clearInterval(heartbeatTimer);
+    heartbeatTimer = null;
+  }
+}
+
+// 音频数据缓冲管理
+function sendAudioData(audioData) {
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    try {
+      ws.send(audioData);
+      return true;
+    } catch (error) {
+      sendLog('error', 'Failed to send audio data:', error.message);
+      return false;
+    }
+  } else {
+    // 连接不可用时缓冲数据
+    if (audioBuffer.length >= maxBufferSize) {
+      audioBuffer.shift(); // 移除最老的数据
+    }
+    audioBuffer.push(audioData);
+    sendLog('warn', `WebSocket not ready (state: ${ws?.readyState}), buffered audio data (${audioBuffer.length}/${maxBufferSize})`);
+    return false;
+  }
+}
+
+function flushAudioBuffer() {
+  if (audioBuffer.length > 0) {
+    sendLog('info', `Flushing ${audioBuffer.length} buffered audio packets`);
+    while (audioBuffer.length > 0 && ws && ws.readyState === WebSocket.OPEN) {
+      const data = audioBuffer.shift();
+      try {
+        ws.send(data);
+      } catch (error) {
+        sendLog('error', 'Failed to send buffered audio data:', error.message);
+        break;
+      }
+    }
+  }
+}
+
+chrome.runtime.onMessage.addListener(async (message) => {
   sendLog('info', 'Received message:', message);
   
   if (message.type === 'START_CAPTURE') {
@@ -93,16 +248,31 @@ chrome.runtime.onMessage.addListener(async (message, sender, sendResponse) => {
         track.onunmute = () => sendLog('info', 'Audio track unmuted');
       }
       
-      // 连接WebSocket - 支持本地和Cloud Run部署
-      const wsUrl = location.hostname === 'localhost' 
+      // 设置WebSocket URL和流ID
+      wsUrl = location.hostname === 'localhost' 
         ? "ws://localhost:8080/stream"
         : "wss://meeting-translate-1019079553349.asia-east2.run.app/stream";
-      sendLog('info', 'Connecting to WebSocket:', wsUrl);
-      ws = new WebSocket(wsUrl);
-      ws.binaryType = "arraybuffer";
+      currentStreamId = message.streamId;
       
-      ws.onopen = async () => {
-        sendLog('success', 'WebSocket connected successfully!');
+      // 重置重连状态
+      reconnectAttempts = 0;
+      reconnectDelay = 1000;
+      
+      // 连接WebSocket
+      connectWebSocket();
+      
+      // 等待WebSocket连接建立后再设置音频处理
+      const waitForConnection = () => {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          setupAudioProcessing();
+        } else {
+          setTimeout(waitForConnection, 100);
+        }
+      };
+      waitForConnection();
+      
+      async function setupAudioProcessing() {
+        sendLog('success', 'Setting up audio processing pipeline...');
         
         try {
           sendLog('info', 'Creating AudioContext...');
@@ -167,51 +337,39 @@ chrome.runtime.onMessage.addListener(async (message, sender, sendResponse) => {
             if (audioDataCount <= 5 || audioDataCount % 50 === 0) {
               sendLog('info', `Sending audio data #${audioDataCount}, size: ${e.data.byteLength} bytes`);
             }
-            if (ws && ws.readyState === 1) {
-              ws.send(e.data);
-            } else {
-              sendLog('warn', 'WebSocket not ready, readyState:', ws?.readyState);
+            
+            // 使用新的音频数据发送函数
+            const success = sendAudioData(e.data);
+            if (!success && audioDataCount % 10 === 0) {
+              sendLog('warn', `Failed to send audio data #${audioDataCount} - connection issues`);
             }
           };
           
           sendLog('success', 'Audio pipeline connected successfully!');
           
-          // 通知background script启动成功
-          sendLog('info', 'Sending CAPTURE_STARTED message');
-          chrome.runtime.sendMessage({ type: 'CAPTURE_STARTED' });
-          
         } catch (audioError) {
           sendLog('error', 'Audio setup failed:', audioError.message);
           chrome.runtime.sendMessage({ type: 'CAPTURE_ERROR', error: audioError.message });
         }
-      };
-      
-      ws.onmessage = (evt) => {
-        sendLog('info', 'Received message from server:', evt.data);
-        // 转发到background script
-        chrome.runtime.sendMessage({ 
-          type: 'SUBTITLE_DATA', 
-          data: evt.data, 
-          tabId: message.tabId 
-        });
-      };
-      
-      ws.onclose = (evt) => {
-        sendLog('warn', 'WebSocket closed, code:', evt.code, 'reason:', evt.reason);
-        chrome.runtime.sendMessage({ type: 'CAPTURE_STOPPED' });
-      };
-      
-      ws.onerror = (error) => {
-        sendLog('error', 'WebSocket error:', error);
-        chrome.runtime.sendMessage({ type: 'CAPTURE_ERROR', error: 'WebSocket connection failed' });
-      };
+      }
       
     } catch (error) {
       sendLog('error', 'Failed to start capture:', error.message);
       chrome.runtime.sendMessage({ type: 'CAPTURE_ERROR', error: error.message });
     }
   } else if (message.type === 'STOP_CAPTURE') {
-    console.log('[Offscreen] Stopping capture');
+    sendLog('info', 'Stopping capture');
+    
+    // 停止心跳
+    stopHeartbeat();
+    
+    // 清除重连定时器
+    if (reconnectTimer) {
+      clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+    }
+    
+    // 断开音频处理
     if (workletNode) {
       workletNode.disconnect();
       workletNode = null;
@@ -220,9 +378,22 @@ chrome.runtime.onMessage.addListener(async (message, sender, sendResponse) => {
       await audioCtx.close();
       audioCtx = null;
     }
+    
+    // 正常关闭WebSocket (code 1000)
     if (ws) {
-      ws.close();
+      ws.close(1000, 'User stopped capture');
       ws = null;
     }
+    
+    // 清空缓冲
+    audioBuffer = [];
+    
+    // 重置状态
+    reconnectAttempts = 0;
+    reconnectDelay = 1000;
+    wsUrl = null;
+    currentStreamId = null;
+    
+    sendLog('info', 'Capture stopped successfully');
   }
 });

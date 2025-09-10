@@ -1,6 +1,7 @@
 # main.py
 from __future__ import annotations
 import json
+import time
 from fastapi import FastAPI, WebSocket
 from fastapi.responses import PlainTextResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -26,7 +27,11 @@ def root():
 async def stream(ws: WebSocket):
     print("[Backend] WebSocket connection attempt")
     await ws.accept()
-    print("[Backend] WebSocket connection accepted")
+    print("[Backend] ✅ WebSocket connection accepted")
+    
+    # 连接统计
+    connection_start_time = time.time()
+    last_heartbeat = time.time()
 
     # 存储要发送的消息队列
     message_queue = []
@@ -91,16 +96,23 @@ async def stream(ws: WebSocket):
                     else:
                         print(f"[Backend] ⚠️ Received empty audio data")
                 elif "text" in msg and msg["text"] == "PING":
-                    print("[Backend] Received PING, sending PONG")
+                    last_heartbeat = time.time()
+                    print("[Backend] 💓 Received heartbeat PING, sending PONG")
                     await ws.send_text("PONG")
                 else:
                     print(f"[Backend] Received unknown message type: {msg}")
             except asyncio.TimeoutError:
                 # 超时是正常的，继续循环检查消息队列
+                # 同时检查心跳超时（5分钟没有心跳就断开连接）
+                if time.time() - last_heartbeat > 300:
+                    print("[Backend] ⚠️ Heartbeat timeout, closing connection")
+                    break
                 pass
     except Exception as e:
         print(f"[Backend] WebSocket error: {e}")
     finally:
+        connection_duration = time.time() - connection_start_time
+        print(f"[Backend] Connection closed after {connection_duration:.1f} seconds")
         print("[Backend] Closing STT stream and WebSocket")
         stt.close()
         try:
