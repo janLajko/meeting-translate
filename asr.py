@@ -79,6 +79,11 @@ class GoogleSTTStream:
             config=config,
             interim_results=True,
             single_utterance=False,
+            # 增加语音上下文相关参数
+            # voice_activity_timeout=speech.StreamingRecognitionConfig.VoiceActivityTimeout(
+            #     speech_start_timeout=60,  # 等待语音开始的时间
+            #     speech_end_timeout=60     # 检测语音结束的时间
+            # )
         )
     
     def _start_threads(self):

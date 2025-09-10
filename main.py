@@ -36,6 +36,10 @@ async def stream(ws: WebSocket):
     # 存储要发送的消息队列
     message_queue = []
     
+    # 音频缓冲区 - 积累更多音频数据再发送给STT
+    audio_buffer = bytearray()
+    audio_buffer_size_threshold = 16000 * 2  # 32KB (约1秒音频数据)
+    
     # 发送字幕给前端（content.js 里会渲染）
     def send_payload(en: str, zh: str, is_final: bool):
         print(f"[Backend] Sending payload - EN: '{en}', ZH: '{zh}', Final: {is_final}")
@@ -139,30 +143,44 @@ async def stream(ws: WebSocket):
                 if "bytes" in msg and msg["bytes"]:
                     bytes_len = len(msg['bytes'])
                     if bytes_len > 0:
-                        print(f"[Backend] 📡 Received audio data: {bytes_len} bytes, pushing to STT stream")
+                        # 添加到音频缓冲区
+                        audio_buffer.extend(msg["bytes"])
                         
-                        # 检查STT流状态并推送数据
-                        if stt and stt.is_healthy():
-                            success = stt.push(msg["bytes"])
-                            if not success:
-                                print(f"[Backend] ⚠️ Failed to push audio data")
-                                # 检查是否需要重建
-                                if not stt.is_healthy() and should_rebuild_stt():
-                                    print(f"[Backend] 🔄 STT stream unhealthy, rebuilding...")
-                                    if create_stt_stream():
-                                        stt.push(msg["bytes"])  # 重试推送
-                        else:
-                            # STT流不健康或不存在，尝试重建
-                            if should_rebuild_stt():
-                                if stt:
-                                    stats = stt.get_stats()
-                                    print(f"[Backend] 📊 STT stats before rebuild: {stats}")
-                                
-                                print(f"[Backend] 🔄 STT stream needs rebuild...")
-                                if create_stt_stream():
-                                    stt.push(msg["bytes"])  # 重试推送
+                        # 当缓冲区达到阈值时，发送给STT
+                        if len(audio_buffer) >= audio_buffer_size_threshold:
+                            print(f"[Backend] 📡 Buffer reached threshold, sending {len(audio_buffer)} bytes to STT")
+                            
+                            # 检查STT流状态并推送数据
+                            if stt and stt.is_healthy():
+                                success = stt.push(bytes(audio_buffer))
+                                if success:
+                                    audio_buffer.clear()  # 清空缓冲区
+                                else:
+                                    print(f"[Backend] ⚠️ Failed to push audio data")
+                                    # 检查是否需要重建
+                                    if not stt.is_healthy() and should_rebuild_stt():
+                                        print(f"[Backend] 🔄 STT stream unhealthy, rebuilding...")
+                                        if create_stt_stream():
+                                            stt.push(bytes(audio_buffer))  # 重试推送
+                                            audio_buffer.clear()
                             else:
-                                print(f"[Backend] ❌ STT stream unavailable and max rebuilds reached")
+                                # STT流不健康或不存在，尝试重建
+                                if should_rebuild_stt():
+                                    if stt:
+                                        stats = stt.get_stats()
+                                        print(f"[Backend] 📊 STT stats before rebuild: {stats}")
+                                    
+                                    print(f"[Backend] 🔄 STT stream needs rebuild...")
+                                    if create_stt_stream():
+                                        stt.push(bytes(audio_buffer))  # 重试推送
+                                        audio_buffer.clear()
+                                else:
+                                    print(f"[Backend] ❌ STT stream unavailable and max rebuilds reached")
+                                    audio_buffer.clear()  # 清空缓冲区避免无限增长
+                        else:
+                            # 显示缓冲区状态（降低频率）
+                            if len(audio_buffer) % 8000 == 0:  # 每8KB显示一次
+                                print(f"[Backend] 📊 Audio buffer: {len(audio_buffer)}/{audio_buffer_size_threshold} bytes")
                     else:
                         print(f"[Backend] ⚠️ Received empty audio data")
                 elif "text" in msg and msg["text"] == "PING":

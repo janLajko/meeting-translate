@@ -3,7 +3,7 @@ class PCM16KWriter extends AudioWorkletProcessor {
   constructor() {
     super();
     this._ratio = sampleRate / 16000;
-    this._samplesPerChunk = Math.round(16000 * 0.2); // 200ms
+    this._samplesPerChunk = Math.round(16000 * 1.0); // 1000ms (1 second) - better for continuous speech
     this._acc = [];
     this._chunkCount = 0;
     this._totalRMS = 0;
