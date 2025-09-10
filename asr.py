@@ -41,9 +41,13 @@ class GoogleSTTStream:
         # 健康检查相关
         self._last_response_time = time.time()
         self._last_transcript = ""
+        self._last_final_transcript = ""  # 分别跟踪final和partial
         self._repeat_count = 0
-        self._max_repeat_threshold = 5
-        self._response_timeout = 30
+        self._consecutive_empty_count = 0
+        self._max_repeat_threshold = 10  # 增加容错次数
+        self._max_empty_threshold = 10   # 连续空结果阈值
+        self._response_timeout = 45      # 增加超时时间
+        self._min_transcript_length = 3  # 最小转录长度才算有效
         
         # 队列系统 - 参考优秀实现
         self._audio_queue = sync_queue.Queue(maxsize=100)  # 音频数据队列
@@ -147,32 +151,56 @@ class GoogleSTTStream:
         print(f"[GoogleSTTStream] ✅ STT stream closed after {runtime:.1f}s, processed {self._bytes_sent} bytes")
     
     def _check_stream_health(self) -> bool:
-        """检查STT流健康状态"""
+        """检查STT流健康状态 - 改进版本"""
         now = time.time()
         
         # 检查响应超时
         if now - self._last_response_time > self._response_timeout:
             print(f"[GoogleSTTStream] ⚠️ Response timeout: {now - self._last_response_time:.1f}s since last response")
             return False
+        
+        # 检查连续空结果
+        if self._consecutive_empty_count >= self._max_empty_threshold:
+            print(f"[GoogleSTTStream] ⚠️ Too many empty results: {self._consecutive_empty_count} consecutive")
+            return False
             
-        # 检查重复输出
-        if self._repeat_count >= self._max_repeat_threshold:
-            print(f"[GoogleSTTStream] ⚠️ Too many repeats: {self._repeat_count} consecutive identical results")
+        # 更严格的重复检查 - 只对长文本重复敏感
+        if (self._repeat_count >= self._max_repeat_threshold and 
+            len(self._last_transcript) >= self._min_transcript_length):
+            print(f"[GoogleSTTStream] ⚠️ Too many meaningful repeats: {self._repeat_count} consecutive identical results")
             return False
             
         return True
     
     def _handle_transcript(self, text: str, is_final: bool) -> bool:
-        """处理transcript并检查重复"""
+        """处理transcript并检查重复 - 改进版本"""
         self._last_response_time = time.time()
         
-        # 检查重复
-        if text == self._last_transcript:
-            self._repeat_count += 1
-            print(f"[GoogleSTTStream] Repeat detected #{self._repeat_count}: '{text}'")
-        else:
+        # 处理空结果
+        if not text or len(text.strip()) == 0:
+            self._consecutive_empty_count += 1
+            print(f"[GoogleSTTStream] Empty result #{self._consecutive_empty_count}")
+            # 重置重复计数器，因为空结果不算重复
             self._repeat_count = 0
-            self._last_transcript = text
+        else:
+            # 重置空结果计数器
+            self._consecutive_empty_count = 0
+            
+            # 分别跟踪final和partial结果的重复
+            if is_final:
+                comparison_text = self._last_final_transcript
+                self._last_final_transcript = text
+            else:
+                comparison_text = self._last_transcript
+                self._last_transcript = text
+            
+            # 检查重复 - 只对相同类型的结果比较
+            if text == comparison_text:
+                self._repeat_count += 1
+                result_type = "Final" if is_final else "Partial"
+                print(f"[GoogleSTTStream] {result_type} repeat #{self._repeat_count}: '{text[:50]}{'...' if len(text) > 50 else ''}'")
+            else:
+                self._repeat_count = 0  # 重置重复计数器
             
         # 检查是否需要重建流
         if not self._check_stream_health():
@@ -334,7 +362,10 @@ class GoogleSTTStream:
             'queue_size': self._audio_queue.qsize(),
             'result_queue_size': self._result_queue.qsize(),
             'repeat_count': self._repeat_count,
+            'consecutive_empty_count': self._consecutive_empty_count,
             'last_response_age': time.time() - self._last_response_time,
+            'last_transcript_length': len(self._last_transcript),
+            'last_final_transcript_length': len(self._last_final_transcript),
             'is_healthy': self.is_healthy(),
             'is_closed': self._closed
         }

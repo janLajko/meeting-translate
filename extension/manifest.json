@@ -8,7 +8,7 @@
     "background": { "service_worker": "background.js" },
     "content_scripts": [
       {
-        "matches": ["*://*.gather.town/*", "*://gather.town/*", "*://*.youtube.com/*", "*://youtube.com/*", "*://*.zep.us/*", "*://zep.us/*"],
+        "matches": ["*://*.gather.town/*", "*://gather.town/*", "*://*.youtube.com/*", "*://youtube.com/*", "*://*.zep.us/*", "*://zep.us/*", "*://meet.google.com/*", "*://*.meet.google.com/*"],
         "js": ["content.js"],
         "css": ["overlay.css"],
         "run_at": "document_idle"

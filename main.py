@@ -7,7 +7,7 @@ from fastapi.responses import PlainTextResponse
 from fastapi.middleware.cors import CORSMiddleware
 import asyncio
 from asr import GoogleSTTStream  # Using mock for translation testing
-from translate import translate_en_to_zh_async
+from translate import translate_en_to_zh_async, get_translation_stats
 
 app = FastAPI(title="Gather Subtitles Server (Python)")
 
@@ -65,19 +65,59 @@ async def stream(ws: WebSocket):
         else:
             print(f"[Backend] Final text is empty, not processing")
 
-    async def translate_and_update(text: str):
-        """异步翻译并更新结果"""
+    async def translate_and_update(text: str, retry_count: int = 0):
+        """改进的异步翻译并更新结果 - 增加错误处理和监控"""
+        max_retries = 1  # 最多重试1次
+        
         try:
-            print(f"[Backend] 🔄 Starting async translation for: '{text}'")
-            zh = await translate_en_to_zh_async(text)
-            print(f"[Backend] ✅ Async translation completed: '{text}' -> '{zh}'")
+            print(f"[Backend] 🔄 Starting async translation (attempt {retry_count + 1}): '{text[:50]}{'...' if len(text) > 50 else ''}'")
             
-            # 发送翻译更新消息
+            # 记录翻译开始时间
+            start_time = time.time()
+            
+            # 调用改进的翻译函数，包含内部重试机制
+            zh = await translate_en_to_zh_async(text, max_retries=2)
+            
+            # 记录翻译耗时
+            elapsed_time = time.time() - start_time
+            print(f"[Backend] ✅ Translation completed in {elapsed_time:.2f}s: '{text}' -> '{zh}'")
+            
+            # 验证翻译质量（基本检查）
+            if zh == text and len(text) > 10:  # 如果翻译结果与原文相同且原文较长，可能是翻译失败
+                print(f"[Backend] ⚠️ Translation may have failed (identical to source), but sending anyway")
+            
+            # 发送翻译结果
             data = json.dumps({"en": text, "zh": zh, "isFinal": True}, ensure_ascii=False)
             message_queue.append(('send', data))
+            
+            print(f"[Backend] 📤 Translation queued for sending: {len(zh)} chars")
+            
+        except asyncio.TimeoutError:
+            print(f"[Backend] ⏰ Translation timeout for: '{text[:50]}{'...' if len(text) > 50 else ''}'")
+            if retry_count < max_retries:
+                print(f"[Backend] 🔄 Retrying translation ({retry_count + 1}/{max_retries})")
+                # 延迟重试
+                await asyncio.sleep(1.0 * (retry_count + 1))
+                await translate_and_update(text, retry_count + 1)
+            else:
+                print(f"[Backend] ❌ Translation timeout after {max_retries + 1} attempts, sending original text")
+                # 发送原文
+                data = json.dumps({"en": text, "zh": text, "isFinal": True}, ensure_ascii=False)
+                message_queue.append(('send', data))
+                
         except Exception as e:
-            print(f"[Backend] ❌ Async translation failed: {e}")
-            # 翻译失败时保持英文显示，不发送更新
+            error_type = type(e).__name__
+            print(f"[Backend] ❌ Translation error ({error_type}): {e}")
+            
+            if retry_count < max_retries:
+                print(f"[Backend] 🔄 Retrying translation due to {error_type} ({retry_count + 1}/{max_retries})")
+                await asyncio.sleep(1.0 * (retry_count + 1))
+                await translate_and_update(text, retry_count + 1)
+            else:
+                print(f"[Backend] ❌ Translation failed after {max_retries + 1} attempts, sending original text")
+                # 发送原文作为最后选择
+                data = json.dumps({"en": text, "zh": text, "isFinal": True}, ensure_ascii=False)
+                message_queue.append(('send', data))
 
     print("[Backend] Creating GoogleSTTStream...")
     stt = None
@@ -120,17 +160,36 @@ async def stream(ws: WebSocket):
 
     try:
         while True:
-            # 定期健康检查
+            # 定期健康检查和统计报告
             now = time.time()
             if now - last_health_check > health_check_interval:
                 if stt:
-                    stats = stt.get_stats()
-                    print(f"[Backend] 📊 STT Health Check: {stats}")
+                    stt_stats = stt.get_stats()
+                    print(f"[Backend] 📊 STT Health Check: {stt_stats}")
                     
                     if not stt.is_healthy():
                         print(f"[Backend] ⚠️ STT health check failed, may need rebuild")
                         if should_rebuild_stt():
                             create_stt_stream()
+                
+                # 翻译统计报告
+                try:
+                    translation_stats = get_translation_stats()
+                    print(f"[Backend] 📈 Translation Stats: Cache:{translation_stats['cache_size']}/{translation_stats['max_cache_size']}, "
+                          f"Requests:{translation_stats['total_requests']}, "
+                          f"Hit Rate:{translation_stats['cache_hit_rate']:.1f}%, "
+                          f"Success Rate:{translation_stats['success_rate']:.1f}%, "
+                          f"Failures:{translation_stats['failures']}, "
+                          f"Retries:{translation_stats['retries']}")
+                except Exception as stats_error:
+                    print(f"[Backend] ⚠️ Failed to get translation stats: {stats_error}")
+                
+                # 连接统计
+                connection_duration = now - connection_start_time
+                print(f"[Backend] ⏱️ Connection Stats: Duration:{connection_duration:.1f}s, "
+                      f"Queue Size:{len(message_queue)}, "
+                      f"Last Heartbeat:{now - last_heartbeat:.1f}s ago")
+                      
                 last_health_check = now
             
             # 检查并处理队列中的消息和翻译任务
@@ -163,30 +222,51 @@ async def stream(ws: WebSocket):
                 if "bytes" in msg and msg["bytes"]:
                     bytes_len = len(msg['bytes'])
                     if bytes_len > 0:
-                        print(f"[Backend] 📡 Received audio data: {bytes_len} bytes, pushing to STT immediately")
+                        # 优化音频数据处理 - 添加质量控制和流量管理
                         
-                        # 即时处理模式 - 直接发送给STT，无缓冲
-                        if stt and stt.is_healthy():
-                            success = stt.push(msg["bytes"])
-                            if not success:
-                                print(f"[Backend] ⚠️ Failed to push audio data")
-                                # 检查是否需要重建
-                                if not stt.is_healthy() and should_rebuild_stt():
-                                    print(f"[Backend] 🔄 STT stream unhealthy, rebuilding...")
-                                    if create_stt_stream():
-                                        stt.push(msg["bytes"])  # 重试推送
+                        # 基本音频质量检查（简单的静音检测）
+                        audio_data = msg["bytes"]
+                        
+                        # 检查是否为静音数据（所有字节都接近0）
+                        is_likely_silent = all(abs(b - 128) < 10 for b in audio_data[:min(100, len(audio_data))])  # 检查前100字节
+                        
+                        if is_likely_silent and bytes_len < 1000:  # 小的静音数据包可能不重要
+                            print(f"[Backend] 🔇 Skipping likely silent audio data: {bytes_len} bytes")
                         else:
-                            # STT流不健康或不存在，尝试重建
-                            if should_rebuild_stt():
-                                if stt:
-                                    stats = stt.get_stats()
-                                    print(f"[Backend] 📊 STT stats before rebuild: {stats}")
-                                
-                                print(f"[Backend] 🔄 STT stream needs rebuild...")
-                                if create_stt_stream():
-                                    stt.push(msg["bytes"])  # 重试推送
+                            # 减少日志频率以降低I/O压力
+                            if bytes_len % 32000 == 0:  # 每32KB记录一次
+                                print(f"[Backend] 📡 Processing audio data: {bytes_len} bytes")
+                            
+                            # 智能STT推送 - 减少对不健康流的压力
+                            if stt and stt.is_healthy():
+                                success = stt.push(audio_data)
+                                if not success:
+                                    print(f"[Backend] ⚠️ Failed to push {bytes_len} bytes to STT")
+                                    # 检查是否需要重建
+                                    if not stt.is_healthy() and should_rebuild_stt():
+                                        print(f"[Backend] 🔄 STT stream unhealthy, rebuilding...")
+                                        if create_stt_stream():
+                                            # 重试推送，但不强制
+                                            stt.push(audio_data)
                             else:
-                                print(f"[Backend] ❌ STT stream unavailable and max rebuilds reached")
+                                # STT流不健康 - 减少重建频率以避免过度压力
+                                if should_rebuild_stt():
+                                    if stt:
+                                        stats = stt.get_stats()
+                                        print(f"[Backend] 📊 STT unhealthy, stats: runtime={stats.get('runtime', 0):.1f}s, "
+                                              f"repeat_count={stats.get('repeat_count', 0)}, "
+                                              f"queue_size={stats.get('queue_size', 0)}")
+                                    
+                                    print(f"[Backend] 🔄 Attempting STT stream rebuild...")
+                                    if create_stt_stream():
+                                        # 只在重建成功后推送
+                                        stt.push(audio_data)
+                                    else:
+                                        print(f"[Backend] ❌ STT rebuild failed, dropping {bytes_len} bytes")
+                                else:
+                                    # 达到重建上限，丢弃数据以避免内存积累
+                                    if bytes_len > 5000:  # 只对大数据包记录日志
+                                        print(f"[Backend] 🗑️ STT unavailable, dropping {bytes_len} bytes audio data")
                     else:
                         print(f"[Backend] ⚠️ Received empty audio data")
                 elif "text" in msg and msg["text"] == "PING":

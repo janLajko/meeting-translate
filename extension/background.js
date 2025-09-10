@@ -7,11 +7,11 @@ let messageQueue = []; // 缓存等待发送的字幕消息
 chrome.action.onClicked.addListener(async (tab) => {
   console.log('[Background] Icon clicked, tab URL:', tab.url);
   
-  // 支持Gather.town、YouTube和Zep.us
-  const supportedSites = /gather\.town|youtube\.com|youtu\.be|zep\.us/;
+  // 支持Gather.town、YouTube、Zep.us和Google Meet
+  const supportedSites = /gather\.town|youtube\.com|youtu\.be|zep\.us|meet\.google\.com/;
   if (!supportedSites.test(tab.url)) {
     console.log('[Background] Not a supported page, ignoring');
-    console.log('[Background] Supported: Gather.town, YouTube, Zep.us');
+    console.log('[Background] Supported: Gather.town, YouTube, Zep.us, Google Meet');
     return;
   }
   if (!portOpen) {

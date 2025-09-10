@@ -61,6 +61,27 @@ setTimeout(() => {
       console.log('[Content] Zep.us game room detected:', location.pathname);
     }
   }
+  
+  // Google Meet特殊处理
+  if (location.hostname.includes('meet.google.com')) {
+    console.log('[Content] Google Meet page detected');
+    // 检查Google Meet页面的音频元素
+    const audioElements = document.querySelectorAll('audio, video');
+    console.log(`[Content] Found ${audioElements.length} audio/video elements in Google Meet`);
+    
+    // 检查Meet相关元素
+    const meetElements = document.querySelectorAll('[data-meeting-title], [jsname], .google-material-icons');
+    console.log(`[Content] Found ${meetElements.length} Meet-specific elements`);
+    
+    // 检查会议状态
+    const joinButton = document.querySelector('[aria-label*="join"], [aria-label*="Join"]');
+    const leaveButton = document.querySelector('[aria-label*="leave"], [aria-label*="Leave"]');
+    console.log('[Content] Meet status:', {
+      hasJoinButton: !!joinButton,
+      hasLeaveButton: !!leaveButton,
+      inMeeting: !!leaveButton
+    });
+  }
 }, 3000);
 
 // 创建字幕容器
@@ -106,9 +127,10 @@ function createSubtitleContainer() {
 // 初始化容器
 createSubtitleContainer();
 
-// YouTube特殊处理
-if (location.hostname.includes('youtube.com')) {
-  console.log('[Content] 🎥 YouTube page detected, adding special handling');
+// YouTube和Google Meet特殊处理
+if (location.hostname.includes('youtube.com') || location.hostname.includes('meet.google.com')) {
+  const platform = location.hostname.includes('youtube.com') ? 'YouTube' : 'Google Meet';
+  console.log(`[Content] 🎥 ${platform} page detected, adding special handling`);
   
   // 添加调试工具到window对象
   window.debugSubtitles = {
@@ -202,12 +224,12 @@ if (location.hostname.includes('youtube.com')) {
     }
   };
   
-  // 在YouTube页面切换时重新初始化
+  // 在页面切换时重新初始化
   let lastUrl = location.href;
   const observer = new MutationObserver(() => {
     if (location.href !== lastUrl) {
       lastUrl = location.href;
-      console.log('[Content] 🔄 YouTube page changed, reinitializing subtitles');
+      console.log(`[Content] 🔄 ${platform} page changed, reinitializing subtitles`);
       setTimeout(() => {
         createSubtitleContainer();
       }, 1000);
@@ -215,13 +237,13 @@ if (location.hostname.includes('youtube.com')) {
   });
   
   observer.observe(document, { subtree: true, childList: true });
-  console.log('[Content] 👀 YouTube navigation observer activated');
+  console.log(`[Content] 👀 ${platform} navigation observer activated`);
   
   // 添加快捷键测试
   document.addEventListener('keydown', (e) => {
     if (e.ctrlKey && e.shiftKey && e.key === 'T') {
       e.preventDefault();
-      console.log('[Content] 🧪 Testing subtitle with hotkey Ctrl+Shift+T');
+      console.log(`[Content] 🧪 Testing subtitle with hotkey Ctrl+Shift+T on ${platform}`);
       window.debugSubtitles.testSubtitle();
     }
   });
