@@ -68,11 +68,59 @@ async def stream(ws: WebSocket):
             print(f"[Backend] Final text is empty, not processing")
 
     print("[Backend] Creating GoogleSTTStream...")
-    stt = GoogleSTTStream(on_partial=on_partial, on_final=on_final)
-    print("[Backend] GoogleSTTStream created successfully")
+    stt = None
+    stt_rebuild_count = 0
+    max_rebuild_attempts = 5
+    
+    def create_stt_stream():
+        nonlocal stt, stt_rebuild_count
+        try:
+            if stt:
+                print(f"[Backend] Closing existing STT stream")
+                stt.close()
+            
+            stt_rebuild_count += 1
+            print(f"[Backend] Creating STT stream (attempt {stt_rebuild_count})")
+            stt = GoogleSTTStream(on_partial=on_partial, on_final=on_final)
+            print("[Backend] ✅ GoogleSTTStream created successfully")
+            return True
+        except Exception as e:
+            print(f"[Backend] ❌ Failed to create STT stream: {e}")
+            return False
+    
+    def should_rebuild_stt():
+        """检查是否需要重建STT流"""
+        if not stt:
+            return True
+        if stt_rebuild_count >= max_rebuild_attempts:
+            print(f"[Backend] ⚠️ Max STT rebuild attempts ({max_rebuild_attempts}) reached")
+            return False
+        return True
+    
+    # 初始创建STT流
+    if not create_stt_stream():
+        print("[Backend] ❌ Failed to create initial STT stream")
+        return
+
+    # 健康检查计时器
+    last_health_check = time.time()
+    health_check_interval = 60  # 每分钟检查一次
 
     try:
         while True:
+            # 定期健康检查
+            now = time.time()
+            if now - last_health_check > health_check_interval:
+                if stt:
+                    stats = stt.get_stats()
+                    print(f"[Backend] 📊 STT Health Check: {stats}")
+                    
+                    if not stt.is_healthy():
+                        print(f"[Backend] ⚠️ STT health check failed, may need rebuild")
+                        if should_rebuild_stt():
+                            create_stt_stream()
+                last_health_check = now
+            
             # 检查并发送队列中的消息
             while message_queue:
                 try:
@@ -92,7 +140,29 @@ async def stream(ws: WebSocket):
                     bytes_len = len(msg['bytes'])
                     if bytes_len > 0:
                         print(f"[Backend] 📡 Received audio data: {bytes_len} bytes, pushing to STT stream")
-                        stt.push(msg["bytes"])
+                        
+                        # 检查STT流状态并推送数据
+                        if stt and stt.is_healthy():
+                            success = stt.push(msg["bytes"])
+                            if not success:
+                                print(f"[Backend] ⚠️ Failed to push audio data")
+                                # 检查是否需要重建
+                                if not stt.is_healthy() and should_rebuild_stt():
+                                    print(f"[Backend] 🔄 STT stream unhealthy, rebuilding...")
+                                    if create_stt_stream():
+                                        stt.push(msg["bytes"])  # 重试推送
+                        else:
+                            # STT流不健康或不存在，尝试重建
+                            if should_rebuild_stt():
+                                if stt:
+                                    stats = stt.get_stats()
+                                    print(f"[Backend] 📊 STT stats before rebuild: {stats}")
+                                
+                                print(f"[Backend] 🔄 STT stream needs rebuild...")
+                                if create_stt_stream():
+                                    stt.push(msg["bytes"])  # 重试推送
+                            else:
+                                print(f"[Backend] ❌ STT stream unavailable and max rebuilds reached")
                     else:
                         print(f"[Backend] ⚠️ Received empty audio data")
                 elif "text" in msg and msg["text"] == "PING":
