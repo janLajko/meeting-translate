@@ -28,6 +28,9 @@ async def stream(ws: WebSocket):
     await ws.accept()
     print("[Backend] WebSocket connection accepted")
 
+    # 存储要发送的消息队列
+    message_queue = []
+    
     # 发送字幕给前端（content.js 里会渲染）
     def send_payload(en: str, zh: str, is_final: bool):
         print(f"[Backend] Sending payload - EN: '{en}', ZH: '{zh}', Final: {is_final}")
@@ -35,13 +38,8 @@ async def stream(ws: WebSocket):
             data = json.dumps({"en": en, "zh": zh, "isFinal": is_final}, ensure_ascii=False)
         except Exception:
             data = json.dumps({"en": en, "zh": zh, "isFinal": is_final})
-        # 使用异步任务发送，避免事件循环错误
-        try:
-            loop = asyncio.get_running_loop()
-            asyncio.run_coroutine_threadsafe(ws.send_text(data), loop)
-        except RuntimeError:
-            # 如果没有运行中的事件循环，创建任务
-            asyncio.create_task(ws.send_text(data))
+        # 将消息添加到队列而不是立即发送
+        message_queue.append(data)
 
     # ASR 回调
     def on_partial(text: str):
@@ -70,23 +68,36 @@ async def stream(ws: WebSocket):
 
     try:
         while True:
-            # 前端发来的是二进制：16kHz、LINEAR16、单声道 PCM
-            msg = await ws.receive()
-            if msg["type"] == "websocket.disconnect":
-                print("[Backend] WebSocket disconnect received")
-                break
-            if "bytes" in msg and msg["bytes"]:
-                bytes_len = len(msg['bytes'])
-                if bytes_len > 0:
-                    print(f"[Backend] 📡 Received audio data: {bytes_len} bytes, pushing to STT stream")
-                    stt.push(msg["bytes"])
+            # 检查并发送队列中的消息
+            while message_queue:
+                try:
+                    data = message_queue.pop(0)
+                    await ws.send_text(data)
+                    print(f"[Backend] ✅ Sent queued message: {data}")
+                except Exception as send_error:
+                    print(f"[Backend] ❌ Failed to send queued message: {send_error}")
+            
+            # 使用短超时接收消息，避免阻塞消息发送
+            try:
+                msg = await asyncio.wait_for(ws.receive(), timeout=0.1)
+                if msg["type"] == "websocket.disconnect":
+                    print("[Backend] WebSocket disconnect received")
+                    break
+                if "bytes" in msg and msg["bytes"]:
+                    bytes_len = len(msg['bytes'])
+                    if bytes_len > 0:
+                        print(f"[Backend] 📡 Received audio data: {bytes_len} bytes, pushing to STT stream")
+                        stt.push(msg["bytes"])
+                    else:
+                        print(f"[Backend] ⚠️ Received empty audio data")
+                elif "text" in msg and msg["text"] == "PING":
+                    print("[Backend] Received PING, sending PONG")
+                    await ws.send_text("PONG")
                 else:
-                    print(f"[Backend] ⚠️ Received empty audio data")
-            elif "text" in msg and msg["text"] == "PING":
-                print("[Backend] Received PING, sending PONG")
-                await ws.send_text("PONG")
-            else:
-                print(f"[Backend] Received unknown message type: {msg}")
+                    print(f"[Backend] Received unknown message type: {msg}")
+            except asyncio.TimeoutError:
+                # 超时是正常的，继续循环检查消息队列
+                pass
     except Exception as e:
         print(f"[Backend] WebSocket error: {e}")
     finally:
