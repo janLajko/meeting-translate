@@ -269,8 +269,11 @@ async def stream(ws: WebSocket):
             # 去重检查 - 避免发送相同的翻译结果
             translation_key = f"{text.strip()}_{zh_text.strip()}"
             if translation_key == last_sent_translation:
-                print(f"[Backend] 🔄 Skipping duplicate translation result: '{zh_text[:30]}...'")
-                return
+                if not is_final:
+                    print(f"[Backend] 🔄 Skipping duplicate translation result: '{zh_text[:30]}...'")
+                    return
+                else:
+                    pass
                 
             last_sent_translation = translation_key
             
