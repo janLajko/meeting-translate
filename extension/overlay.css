@@ -58,4 +58,38 @@ html body #__gather_subtitles_container__ .subtitle-line .zh {
     line-height: 1.4 !important;
     text-align: center !important;
 }
+
+/* 字幕开关按钮样式 */
+html body #__gather_subtitles_toggle__ {
+    position: fixed !important;
+    right: 20px !important;
+    bottom: 20px !important;
+    width: 50px !important;
+    height: 50px !important;
+    background: rgba(0, 0, 0, 0.8) !important;
+    border-radius: 25px !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    cursor: pointer !important;
+    z-index: 2147483648 !important;
+    border: 2px solid rgba(255, 255, 255, 0.2) !important;
+    backdrop-filter: saturate(150%) blur(6px) !important;
+    transition: all 0.3s ease !important;
+    font-size: 24px !important;
+    user-select: none !important;
+    pointer-events: auto !important;
+    visibility: visible !important;
+    opacity: 1 !important;
+}
+
+html body #__gather_subtitles_toggle__:hover {
+    background: rgba(0, 0, 0, 0.9) !important;
+    border-color: rgba(255, 255, 255, 0.4) !important;
+    transform: scale(1.1) !important;
+}
+
+html body #__gather_subtitles_toggle__:active {
+    transform: scale(0.95) !important;
+}
   

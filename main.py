@@ -36,6 +36,15 @@ async def stream(ws: WebSocket):
     # 存储要发送的消息队列
     message_queue = []
     
+    # 语言检测统计
+    language_stats = {
+        'total_results': 0,
+        'chinese_count': 0,
+        'english_count': 0,
+        'other_count': 0,
+        'last_detected_languages': []  # 最近10个检测结果
+    }
+    
     # 移除音频缓冲区 - 改为即时处理以降低延迟
     # audio_buffer = bytearray()
     # audio_buffer_size_threshold = 16000 * 2  # 32KB (约1秒音频数据)
@@ -50,18 +59,41 @@ async def stream(ws: WebSocket):
         # 将消息添加到队列而不是立即发送
         message_queue.append(('send', data))
 
-    # ASR 回调 - 优化翻译逻辑，只发送翻译后的Final结果
-    def on_partial(text: str):
-        print(f"[Backend] ✅ ASR partial result received: '{text}' (length: {len(text)})")
+    # ASR 回调 - 支持语言检测和智能翻译逻辑
+    def on_partial(text: str, language_code: str):
+        print(f"[Backend] ✅ ASR partial result received: '{text}' (lang: {language_code}, length: {len(text)})")
         # 不发送Partial结果到前端，只记录日志
         if len(text.strip()) == 0:
             print(f"[Backend] Partial text is empty")
 
-    def on_final(text: str):
-        print(f"[Backend] ✅ ASR final result received: '{text}' (length: {len(text)})")
+    def on_final(text: str, language_code: str):
+        print(f"[Backend] ✅ ASR final result received: '{text}' (lang: {language_code}, length: {len(text)})")
         if len(text.strip()) > 0:
-            # Final结果：直接进行异步翻译，不先发送英文
-            message_queue.append(('translate', text))
+            # 更新语言统计
+            language_stats['total_results'] += 1
+            if language_code.startswith('zh'):
+                language_stats['chinese_count'] += 1
+                lang_type = 'Chinese'
+            elif language_code.startswith('en'):
+                language_stats['english_count'] += 1
+                lang_type = 'English'
+            else:
+                language_stats['other_count'] += 1
+                lang_type = 'Other'
+            
+            # 记录最近的语言检测结果
+            language_stats['last_detected_languages'].append({
+                'language': language_code,
+                'type': lang_type,
+                'text_preview': text[:30] + ('...' if len(text) > 30 else ''),
+                'timestamp': time.time()
+            })
+            # 只保留最近10个结果
+            if len(language_stats['last_detected_languages']) > 10:
+                language_stats['last_detected_languages'].pop(0)
+            
+            # Final结果：根据语言智能处理翻译
+            message_queue.append(('smart_translate', {'text': text, 'language': language_code}))
         else:
             print(f"[Backend] Final text is empty, not processing")
 
@@ -119,6 +151,46 @@ async def stream(ws: WebSocket):
                 data = json.dumps({"en": text, "zh": text, "isFinal": True}, ensure_ascii=False)
                 message_queue.append(('send', data))
 
+    async def smart_translate_and_update(text: str, language_code: str, retry_count: int = 0):
+        """智能翻译函数 - 根据检测到的语言决定是否翻译"""
+        max_retries = 1
+        
+        try:
+            print(f"[Backend] 🔄 Smart translate processing (attempt {retry_count + 1}): '{text[:50]}{'...' if len(text) > 50 else ''}' (lang: {language_code})")
+            
+            start_time = time.time()
+            
+            # 根据语言代码智能决定是否翻译
+            if language_code.startswith('zh'):  # 中文（zh-CN, zh-TW等）
+                # 中文内容直接显示，不翻译
+                zh_text = text
+                print(f"[Backend] 📝 Chinese detected, displaying original text: '{text}'")
+            else:
+                # 英文或其他语言，进行翻译
+                zh_text = await translate_en_to_zh_async(text, max_retries=2)
+                elapsed_time = time.time() - start_time
+                print(f"[Backend] 🔄 Translation completed in {elapsed_time:.2f}s: '{text}' -> '{zh_text}'")
+            
+            # 发送结果
+            data = json.dumps({"en": text, "zh": zh_text, "isFinal": True}, ensure_ascii=False)
+            message_queue.append(('send', data))
+            
+            print(f"[Backend] 📤 Smart translation queued for sending: {len(zh_text)} chars (lang: {language_code})")
+            
+        except Exception as e:
+            error_type = type(e).__name__
+            print(f"[Backend] ❌ Smart translation error ({error_type}): {e}")
+            
+            if retry_count < max_retries:
+                print(f"[Backend] 🔄 Retrying smart translation ({retry_count + 1}/{max_retries})")
+                await asyncio.sleep(1.0 * (retry_count + 1))
+                await smart_translate_and_update(text, language_code, retry_count + 1)
+            else:
+                print(f"[Backend] ❌ Smart translation failed after {max_retries + 1} attempts, sending original text")
+                # 发送原文
+                data = json.dumps({"en": text, "zh": text, "isFinal": True}, ensure_ascii=False)
+                message_queue.append(('send', data))
+
     print("[Backend] Creating GoogleSTTStream...")
     stt = None
     stt_rebuild_count = 0
@@ -133,7 +205,12 @@ async def stream(ws: WebSocket):
             
             stt_rebuild_count += 1
             print(f"[Backend] Creating STT stream (attempt {stt_rebuild_count})")
-            stt = GoogleSTTStream(on_partial=on_partial, on_final=on_final)
+            stt = GoogleSTTStream(
+                on_partial=on_partial, 
+                on_final=on_final,
+                language="en-US",
+                alt_langs=["zh-CN"]  # 添加简体中文作为备选语言
+            )
             print("[Backend] ✅ GoogleSTTStream created successfully")
             return True
         except Exception as e:
@@ -189,6 +266,22 @@ async def stream(ws: WebSocket):
                 print(f"[Backend] ⏱️ Connection Stats: Duration:{connection_duration:.1f}s, "
                       f"Queue Size:{len(message_queue)}, "
                       f"Last Heartbeat:{now - last_heartbeat:.1f}s ago")
+                
+                # 语言检测统计报告
+                if language_stats['total_results'] > 0:
+                    chinese_pct = (language_stats['chinese_count'] / language_stats['total_results']) * 100
+                    english_pct = (language_stats['english_count'] / language_stats['total_results']) * 100
+                    other_pct = (language_stats['other_count'] / language_stats['total_results']) * 100
+                    print(f"[Backend] 🗣️ Language Stats: Total:{language_stats['total_results']}, "
+                          f"Chinese:{language_stats['chinese_count']}({chinese_pct:.1f}%), "
+                          f"English:{language_stats['english_count']}({english_pct:.1f}%), "
+                          f"Other:{language_stats['other_count']}({other_pct:.1f}%)")
+                    
+                    # 显示最近的语言检测结果
+                    if language_stats['last_detected_languages']:
+                        recent = language_stats['last_detected_languages'][-3:]  # 最近3个
+                        recent_info = [f"{r['type']}:'{r['text_preview']}'" for r in recent]
+                        print(f"[Backend] 🕐 Recent Languages: {', '.join(recent_info)}")
                       
                 last_health_check = now
             
@@ -199,9 +292,15 @@ async def stream(ws: WebSocket):
                     if isinstance(item, tuple) and len(item) == 2:
                         action, data = item
                         if action == 'translate':
-                            # 启动异步翻译任务
+                            # 启动传统异步翻译任务（保留兼容性）
                             asyncio.create_task(translate_and_update(data))
                             print(f"[Backend] 🔄 Started translation task for: '{data}'")
+                        elif action == 'smart_translate':
+                            # 启动智能翻译任务
+                            text = data['text']
+                            language = data['language']
+                            asyncio.create_task(smart_translate_and_update(text, language))
+                            print(f"[Backend] 🧠 Started smart translation task for: '{text}' (lang: {language})")
                         elif action == 'send':
                             # 发送消息
                             await ws.send_text(data)

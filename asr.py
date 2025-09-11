@@ -22,8 +22,8 @@ class GoogleSTTStream:
     """
     def __init__(
         self,
-        on_partial: Callable[[str], None],
-        on_final: Callable[[str], None],
+        on_partial: Callable[[str, str], None],  # 增加语言参数: (text, language_code)
+        on_final: Callable[[str, str], None],    # 增加语言参数: (text, language_code)
         language: str = "en-US",
         alt_langs: Optional[list[str]] = None,
     ) -> None:
@@ -247,12 +247,18 @@ class GoogleSTTStream:
                 confidence = getattr(result.alternatives[0], 'confidence', 0.0)
                 is_final = result.is_final
                 
+                # 提取语言检测信息
+                language_code = getattr(result, 'language_code', self._language)
+                if not language_code:
+                    language_code = self._language  # 使用默认语言作为后备
+                
                 if transcript:
                     # 发送结果到结果队列
                     result_data = {
                         'transcript': transcript,
                         'confidence': confidence,
                         'is_final': is_final,
+                        'language_code': language_code,  # 添加语言代码
                         'timestamp': time.time()
                     }
                     
@@ -301,20 +307,21 @@ class GoogleSTTStream:
                     transcript = result_data['transcript']
                     confidence = result_data['confidence']
                     is_final = result_data['is_final']
+                    language_code = result_data.get('language_code', self._language)
                     
                     # 健康检查
                     if not self._handle_transcript(transcript, is_final):
                         print(f"[GoogleSTTStream] ⚠️ Health check failed, stopping result worker")
                         break
                     
-                    # 调用回调
+                    # 调用回调，传递语言代码
                     try:
                         if is_final:
-                            self._on_final(transcript)
-                            print(f"[GoogleSTTStream] ✅ Final: '{transcript}' (conf: {confidence:.2f})")
+                            self._on_final(transcript, language_code)
+                            print(f"[GoogleSTTStream] ✅ Final: '{transcript}' (lang: {language_code}, conf: {confidence:.2f})")
                         else:
-                            self._on_partial(transcript)
-                            print(f"[GoogleSTTStream] 📋 Partial: '{transcript}' (conf: {confidence:.2f})")
+                            self._on_partial(transcript, language_code)
+                            print(f"[GoogleSTTStream] 📋 Partial: '{transcript}' (lang: {language_code}, conf: {confidence:.2f})")
                     except Exception as callback_error:
                         print(f"[GoogleSTTStream] ❌ Callback error: {callback_error}")
                     

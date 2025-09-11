@@ -84,9 +84,12 @@ setTimeout(() => {
   }
 }, 3000);
 
-// 创建字幕容器
+// 字幕系统状态管理
 const containerId = "__gather_subtitles_container__";
+const toggleButtonId = "__gather_subtitles_toggle__";
 let container = document.getElementById(containerId);
+let toggleButton = null;
+let subtitlesVisible = localStorage.getItem('gather_subtitles_visible') !== 'false'; // 默认显示
 
 function createSubtitleContainer() {
   console.log('[Content] Creating subtitle container...');
@@ -114,6 +117,9 @@ function createSubtitleContainer() {
     backdrop-filter: saturate(150%) blur(6px) !important;
     pointer-events: none !important;
     border: 2px solid rgba(255,255,255,0.1) !important;
+    transition: opacity 0.3s ease !important;
+    opacity: ${subtitlesVisible ? '1' : '0'} !important;
+    display: ${subtitlesVisible ? 'block' : 'none'} !important;
   `;
   
   document.body.appendChild(container);
@@ -124,8 +130,118 @@ function createSubtitleContainer() {
   return container;
 }
 
-// 初始化容器
+// 创建字幕开关按钮
+function createToggleButton() {
+  console.log('[Content] Creating subtitle toggle button...');
+  
+  // 移除现有按钮
+  if (toggleButton) {
+    toggleButton.remove();
+  }
+  
+  toggleButton = document.createElement("div");
+  toggleButton.id = toggleButtonId;
+  toggleButton.style.cssText = `
+    position: fixed !important;
+    right: 20px !important;
+    bottom: 20px !important;
+    width: 50px !important;
+    height: 50px !important;
+    background: rgba(0, 0, 0, 0.8) !important;
+    border-radius: 25px !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    cursor: pointer !important;
+    z-index: 2147483648 !important;
+    border: 2px solid rgba(255, 255, 255, 0.2) !important;
+    backdrop-filter: saturate(150%) blur(6px) !important;
+    transition: all 0.3s ease !important;
+    font-size: 24px !important;
+    user-select: none !important;
+    pointer-events: auto !important;
+  `;
+  
+  // 设置按钮图标和标题
+  updateToggleButtonState();
+  
+  // 鼠标悬停效果
+  toggleButton.addEventListener('mouseenter', () => {
+    toggleButton.style.background = 'rgba(0, 0, 0, 0.9)';
+    toggleButton.style.borderColor = 'rgba(255, 255, 255, 0.4)';
+    toggleButton.style.transform = 'scale(1.1)';
+  });
+  
+  toggleButton.addEventListener('mouseleave', () => {
+    toggleButton.style.background = 'rgba(0, 0, 0, 0.8)';
+    toggleButton.style.borderColor = 'rgba(255, 255, 255, 0.2)';
+    toggleButton.style.transform = 'scale(1)';
+  });
+  
+  // 点击事件
+  toggleButton.addEventListener('click', toggleSubtitles);
+  
+  document.body.appendChild(toggleButton);
+  console.log('[Content] ✅ Toggle button created and added to body');
+  
+  return toggleButton;
+}
+
+// 更新开关按钮状态
+function updateToggleButtonState() {
+  if (!toggleButton) return;
+  
+  if (subtitlesVisible) {
+    toggleButton.innerHTML = '👁️';
+    toggleButton.title = '点击隐藏字幕 (Ctrl+H)';
+  } else {
+    toggleButton.innerHTML = '👁️‍🗨️';
+    toggleButton.title = '点击显示字幕 (Ctrl+H)';
+  }
+}
+
+// 切换字幕显示状态
+function toggleSubtitles() {
+  subtitlesVisible = !subtitlesVisible;
+  console.log(`[Content] 🔄 Toggling subtitles: ${subtitlesVisible ? 'visible' : 'hidden'}`);
+  
+  // 保存状态到 localStorage
+  localStorage.setItem('gather_subtitles_visible', subtitlesVisible.toString());
+  
+  // 更新容器显示状态
+  if (container) {
+    if (subtitlesVisible) {
+      container.style.display = 'block';
+      container.style.opacity = '1';
+    } else {
+      container.style.opacity = '0';
+      setTimeout(() => {
+        if (!subtitlesVisible) { // 确认状态没有被再次改变
+          container.style.display = 'none';
+        }
+      }, 300); // 等待淡出动画完成
+    }
+  }
+  
+  // 更新按钮状态
+  updateToggleButtonState();
+  
+  console.log(`[Content] ✅ Subtitles ${subtitlesVisible ? 'shown' : 'hidden'}`);
+}
+
+// 添加键盘快捷键支持
+document.addEventListener('keydown', (e) => {
+  // Ctrl+H 或 Escape 切换字幕
+  if ((e.ctrlKey && e.key === 'h') || e.key === 'Escape') {
+    e.preventDefault();
+    console.log('[Content] ⌨️ Keyboard shortcut triggered:', e.key);
+    toggleSubtitles();
+  }
+});
+
+// 初始化容器和按钮
 createSubtitleContainer();
+createToggleButton();
 
 // YouTube和Google Meet特殊处理
 if (location.hostname.includes('youtube.com') || location.hostname.includes('meet.google.com')) {
@@ -221,6 +337,43 @@ if (location.hostname.includes('youtube.com') || location.hostname.includes('mee
         console.error('[Debug] ❌ Message simulation failed:', error);
         return { success: false, error: error.message };
       }
+    },
+    
+    // 字幕开关相关调试工具
+    toggleSubtitles: function() {
+      console.log('[Debug] Toggling subtitles via debug tool');
+      toggleSubtitles();
+      return { 
+        subtitlesVisible, 
+        message: `Subtitles ${subtitlesVisible ? 'shown' : 'hidden'}` 
+      };
+    },
+    
+    showSubtitles: function() {
+      console.log('[Debug] Showing subtitles via debug tool');
+      if (!subtitlesVisible) {
+        toggleSubtitles();
+      }
+      return { subtitlesVisible: true, message: 'Subtitles shown' };
+    },
+    
+    hideSubtitles: function() {
+      console.log('[Debug] Hiding subtitles via debug tool');
+      if (subtitlesVisible) {
+        toggleSubtitles();
+      }
+      return { subtitlesVisible: false, message: 'Subtitles hidden' };
+    },
+    
+    getSubtitleState: function() {
+      return {
+        subtitlesVisible,
+        containerExists: !!container,
+        containerInDOM: container ? document.contains(container) : false,
+        toggleButtonExists: !!toggleButton,
+        toggleButtonInDOM: toggleButton ? document.contains(toggleButton) : false,
+        localStorage: localStorage.getItem('gather_subtitles_visible')
+      };
     }
   };
   
@@ -232,6 +385,7 @@ if (location.hostname.includes('youtube.com') || location.hostname.includes('mee
       console.log(`[Content] 🔄 ${platform} page changed, reinitializing subtitles`);
       setTimeout(() => {
         createSubtitleContainer();
+        createToggleButton();
       }, 1000);
     }
   });
@@ -256,7 +410,12 @@ if (location.hostname.includes('youtube.com') || location.hostname.includes('mee
   console.log('- window.debugSubtitles.checkConnection() - Check background connection');
   console.log('- window.debugSubtitles.showStatus() - Show content script status');
   console.log('- window.debugSubtitles.simulateMessage() - Simulate subtitle message');
+  console.log('- window.debugSubtitles.toggleSubtitles() - Toggle subtitle visibility');
+  console.log('- window.debugSubtitles.showSubtitles() - Force show subtitles');
+  console.log('- window.debugSubtitles.hideSubtitles() - Force hide subtitles');
+  console.log('- window.debugSubtitles.getSubtitleState() - Get subtitle system state');
   console.log('- Ctrl+Shift+T - Quick test subtitle');
+  console.log('- Ctrl+H or Escape - Toggle subtitle visibility');
 }
 
 // 心跳状态
@@ -332,6 +491,12 @@ function renderLine({ en, zh, isFinal }) {
   if (!container) {
     console.warn('[Content] ⚠️ Container not found, recreating...');
     createSubtitleContainer();
+  }
+  
+  // 如果字幕被隐藏，则不渲染新的字幕行
+  if (!subtitlesVisible) {
+    console.log('[Content] 🙈 Subtitles are hidden, skipping render');
+    return;
   }
   
   // 添加测试可见性
