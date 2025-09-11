@@ -2,12 +2,75 @@
 from __future__ import annotations
 import json
 import time
+import re
 from fastapi import FastAPI, WebSocket
 from fastapi.responses import PlainTextResponse
 from fastapi.middleware.cors import CORSMiddleware
 import asyncio
 from asr import GoogleSTTStream  # Using mock for translation testing
 from translate import translate_en_to_zh_async, get_translation_stats
+
+# 语言处理工具函数
+def has_sentence_ending_punctuation(text: str) -> bool:
+    """检测文本是否包含句子结束标点符号"""
+    if not text:
+        return False
+    
+    # 英文标点: . ! ? 
+    # 中文标点: 。！？
+    # 其他常用标点: ؟ ¿ ¡ ؛ 
+    sentence_endings = r'[.!?。！？؟¿¡؛]'
+    
+    # 检查文本末尾是否有句子结束标点
+    stripped_text = text.rstrip()
+    if re.search(sentence_endings + r'\s*$', stripped_text):
+        return True
+    
+    # 检查文本中间是否有明显的句子分界
+    sentences = re.split(sentence_endings, text)
+    # 如果分割后有多个非空部分，说明有句子结束标点
+    if len([s for s in sentences if s.strip()]) > 1:
+        return True
+        
+    return False
+
+def contains_chinese_chars(text: str) -> bool:
+    """检测文本是否包含中文字符"""
+    if not text:
+        return False
+    
+    # CJK统一表意文字范围 (最常用的中文字符)
+    # \u4e00-\u9fff: 中日韩统一表意文字
+    # \u3400-\u4dbf: 中日韩统一表意文字扩展A
+    # \uff00-\uffef: 半角及全角字符
+    chinese_pattern = r'[\u4e00-\u9fff\u3400-\u4dbf\uff00-\uffef]'
+    
+    return bool(re.search(chinese_pattern, text))
+
+def detect_text_language(text: str, stt_language_code: str = None) -> str:
+    """智能语言检测 - 结合STT结果和字符分析"""
+    if not text:
+        return 'unknown'
+    
+    # 首先检查字符组成
+    has_chinese = contains_chinese_chars(text)
+    
+    # 如果文本包含中文字符，优先判定为中文
+    if has_chinese:
+        return 'zh-CN' if not stt_language_code or not stt_language_code.startswith('zh') else stt_language_code
+    
+    # 如果STT明确检测为中文但没有中文字符，可能是误判
+    if stt_language_code and stt_language_code.startswith('zh') and not has_chinese:
+        print(f"[Language] ⚠️ STT detected Chinese but no Chinese chars found in: '{text[:30]}...'")
+        # 降级到基于字符的检测
+        return 'en-US'  # 默认英文
+    
+    # 使用STT的语言检测结果
+    if stt_language_code:
+        return stt_language_code
+    
+    # 最后默认为英文
+    return 'en-US'
 
 app = FastAPI(title="Gather Subtitles Server (Python)")
 
@@ -45,6 +108,15 @@ async def stream(ws: WebSocket):
         'last_detected_languages': []  # 最近10个检测结果
     }
     
+    # 文本缓冲区 - 用于积累partial结果直到检测到标点
+    partial_text_buffer = {
+        'content': '',
+        'language_code': 'en-US',
+        'last_update': time.time(),
+        'buffer_timeout': 5.0,  # 5秒超时，避免无标点的长句一直缓冲
+        'min_chars_for_punctuation_check': 10  # 最少10个字符才检查标点
+    }
+    
     # 移除音频缓冲区 - 改为即时处理以降低延迟
     # audio_buffer = bytearray()
     # audio_buffer_size_threshold = 16000 * 2  # 32KB (约1秒音频数据)
@@ -59,22 +131,40 @@ async def stream(ws: WebSocket):
         # 将消息添加到队列而不是立即发送
         message_queue.append(('send', data))
 
-    # ASR 回调 - 支持语言检测和智能翻译逻辑
-    def on_partial(text: str, language_code: str):
-        print(f"[Backend] ✅ ASR partial result received: '{text}' (lang: {language_code}, length: {len(text)})")
-        # 不发送Partial结果到前端，只记录日志
+    def process_text_for_translation(text: str, language_code: str, is_final: bool = False, force_translate: bool = False):
+        """处理文本以决定是否触发翻译 - 统一的文本处理逻辑"""
         if len(text.strip()) == 0:
-            print(f"[Backend] Partial text is empty")
-
-    def on_final(text: str, language_code: str):
-        print(f"[Backend] ✅ ASR final result received: '{text}' (lang: {language_code}, length: {len(text)})")
-        if len(text.strip()) > 0:
+            return
+            
+        # 智能语言检测
+        detected_language = detect_text_language(text, language_code)
+        
+        print(f"[Backend] 📝 Processing text: '{text[:50]}{'...' if len(text) > 50 else ''}' "
+              f"(STT: {language_code}, Detected: {detected_language}, Final: {is_final}, Force: {force_translate})")
+        
+        # 决定是否触发翻译
+        should_translate = False
+        trigger_reason = ""
+        
+        if is_final:
+            should_translate = True
+            trigger_reason = "is_final"
+        elif force_translate:
+            should_translate = True
+            trigger_reason = "force_translate"
+        elif has_sentence_ending_punctuation(text) and len(text.strip()) >= partial_text_buffer['min_chars_for_punctuation_check']:
+            should_translate = True
+            trigger_reason = "punctuation_detected"
+        
+        if should_translate:
+            print(f"[Backend] 🚀 Triggering translation - Reason: {trigger_reason}")
+            
             # 更新语言统计
             language_stats['total_results'] += 1
-            if language_code.startswith('zh'):
+            if detected_language.startswith('zh'):
                 language_stats['chinese_count'] += 1
                 lang_type = 'Chinese'
-            elif language_code.startswith('en'):
+            elif detected_language.startswith('en'):
                 language_stats['english_count'] += 1
                 lang_type = 'English'
             else:
@@ -83,17 +173,46 @@ async def stream(ws: WebSocket):
             
             # 记录最近的语言检测结果
             language_stats['last_detected_languages'].append({
-                'language': language_code,
+                'language': detected_language,
                 'type': lang_type,
                 'text_preview': text[:30] + ('...' if len(text) > 30 else ''),
-                'timestamp': time.time()
+                'timestamp': time.time(),
+                'trigger_reason': trigger_reason
             })
             # 只保留最近10个结果
             if len(language_stats['last_detected_languages']) > 10:
                 language_stats['last_detected_languages'].pop(0)
             
-            # Final结果：根据语言智能处理翻译
-            message_queue.append(('smart_translate', {'text': text, 'language': language_code}))
+            # 添加到翻译队列
+            message_queue.append(('smart_translate', {'text': text, 'language': detected_language}))
+            
+            # 清空缓冲区（如果用的话）
+            partial_text_buffer['content'] = ''
+            partial_text_buffer['last_update'] = time.time()
+        else:
+            print(f"[Backend] 📋 Not translating yet - Text: '{text[:30]}...', Length: {len(text)}, Has punctuation: {has_sentence_ending_punctuation(text)}")
+
+    # ASR 回调 - 支持智能标点触发翻译
+    def on_partial(text: str, language_code: str):
+        print(f"[Backend] 📄 ASR partial: '{text}' (lang: {language_code}, len: {len(text)})")
+        
+        if len(text.strip()) == 0:
+            return
+            
+        # 更新缓冲区
+        partial_text_buffer['content'] = text
+        partial_text_buffer['language_code'] = language_code
+        partial_text_buffer['last_update'] = time.time()
+        
+        # 检查是否需要基于标点符号触发翻译
+        process_text_for_translation(text, language_code, is_final=False, force_translate=False)
+
+    def on_final(text: str, language_code: str):
+        print(f"[Backend] ✅ ASR final: '{text}' (lang: {language_code}, len: {len(text)})")
+        
+        if len(text.strip()) > 0:
+            # Final结果始终触发翻译
+            process_text_for_translation(text, language_code, is_final=True, force_translate=False)
         else:
             print(f"[Backend] Final text is empty, not processing")
 
@@ -152,30 +271,41 @@ async def stream(ws: WebSocket):
                 message_queue.append(('send', data))
 
     async def smart_translate_and_update(text: str, language_code: str, retry_count: int = 0):
-        """智能翻译函数 - 根据检测到的语言决定是否翻译"""
+        """智能翻译函数 - 根据检测到的语言决定是否翻译（增强版）"""
         max_retries = 1
         
         try:
-            print(f"[Backend] 🔄 Smart translate processing (attempt {retry_count + 1}): '{text[:50]}{'...' if len(text) > 50 else ''}' (lang: {language_code})")
+            # 再次进行语言检测确保准确性（防御性编程）
+            final_language = detect_text_language(text, language_code)
+            has_chinese = contains_chinese_chars(text)
+            
+            print(f"[Backend] 🧠 Smart translate (attempt {retry_count + 1}): '{text[:50]}{'...' if len(text) > 50 else ''}' "
+                  f"(Input lang: {language_code}, Final lang: {final_language}, Has Chinese chars: {has_chinese})")
             
             start_time = time.time()
             
-            # 根据语言代码智能决定是否翻译
-            if language_code.startswith('zh'):  # 中文（zh-CN, zh-TW等）
+            # 智能翻译决策 - 使用双重验证
+            if final_language.startswith('zh') or has_chinese:
                 # 中文内容直接显示，不翻译
                 zh_text = text
-                print(f"[Backend] 📝 Chinese detected, displaying original text: '{text}'")
+                print(f"[Backend] 🇨🇳 Chinese content detected - displaying as-is: '{text}'")
+                # 记录中文检测情况
+                detection_info = f"Lang:{final_language}, Chars:{has_chinese}"
+                print(f"[Backend] 🔍 Chinese detection details: {detection_info}")
             else:
                 # 英文或其他语言，进行翻译
+                print(f"[Backend] 🇺🇸 Non-Chinese content - translating to Chinese: '{text[:30]}...'")
                 zh_text = await translate_en_to_zh_async(text, max_retries=2)
                 elapsed_time = time.time() - start_time
-                print(f"[Backend] 🔄 Translation completed in {elapsed_time:.2f}s: '{text}' -> '{zh_text}'")
+                print(f"[Backend] ✅ Translation completed in {elapsed_time:.2f}s: '{text}' -> '{zh_text}'")
             
             # 发送结果
             data = json.dumps({"en": text, "zh": zh_text, "isFinal": True}, ensure_ascii=False)
             message_queue.append(('send', data))
             
-            print(f"[Backend] 📤 Smart translation queued for sending: {len(zh_text)} chars (lang: {language_code})")
+            # 增强日志记录
+            char_analysis = f"Chinese chars: {has_chinese}, Lang detection: {final_language}"
+            print(f"[Backend] 📤 Smart translation queued ({len(zh_text)} chars) - {char_analysis}")
             
         except Exception as e:
             error_type = type(e).__name__
@@ -187,7 +317,7 @@ async def stream(ws: WebSocket):
                 await smart_translate_and_update(text, language_code, retry_count + 1)
             else:
                 print(f"[Backend] ❌ Smart translation failed after {max_retries + 1} attempts, sending original text")
-                # 发送原文
+                # 发送原文作为最后选择
                 data = json.dumps({"en": text, "zh": text, "isFinal": True}, ensure_ascii=False)
                 message_queue.append(('send', data))
 
@@ -267,7 +397,20 @@ async def stream(ws: WebSocket):
                       f"Queue Size:{len(message_queue)}, "
                       f"Last Heartbeat:{now - last_heartbeat:.1f}s ago")
                 
-                # 语言检测统计报告
+                # 检查缓冲区超时 - 处理没有标点的长句
+                if (partial_text_buffer['content'] and 
+                    now - partial_text_buffer['last_update'] > partial_text_buffer['buffer_timeout'] and
+                    len(partial_text_buffer['content'].strip()) > 5):
+                    
+                    print(f"[Backend] ⏰ Buffer timeout, force translating: '{partial_text_buffer['content'][:50]}...'")
+                    process_text_for_translation(
+                        partial_text_buffer['content'], 
+                        partial_text_buffer['language_code'], 
+                        is_final=False, 
+                        force_translate=True
+                    )
+                
+                # 语言检测统计报告（增强版）
                 if language_stats['total_results'] > 0:
                     chinese_pct = (language_stats['chinese_count'] / language_stats['total_results']) * 100
                     english_pct = (language_stats['english_count'] / language_stats['total_results']) * 100
@@ -277,11 +420,15 @@ async def stream(ws: WebSocket):
                           f"English:{language_stats['english_count']}({english_pct:.1f}%), "
                           f"Other:{language_stats['other_count']}({other_pct:.1f}%)")
                     
-                    # 显示最近的语言检测结果
+                    # 显示最近的语言检测结果（增强版）
                     if language_stats['last_detected_languages']:
                         recent = language_stats['last_detected_languages'][-3:]  # 最近3个
-                        recent_info = [f"{r['type']}:'{r['text_preview']}'" for r in recent]
+                        recent_info = [f"{r['type']}({r['trigger_reason']}):'{r['text_preview']}'" for r in recent]
                         print(f"[Backend] 🕐 Recent Languages: {', '.join(recent_info)}")
+                    
+                    # 缓冲区状态报告
+                    buffer_status = f"Buffer: {len(partial_text_buffer['content'])} chars, Age: {now - partial_text_buffer['last_update']:.1f}s"
+                    print(f"[Backend] 📋 {buffer_status}")
                       
                 last_health_check = now
             
