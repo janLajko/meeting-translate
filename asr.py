@@ -199,6 +199,11 @@ class GoogleSTTStream:
                 self._repeat_count += 1
                 result_type = "Final" if is_final else "Partial"
                 print(f"[GoogleSTTStream] {result_type} repeat #{self._repeat_count}: '{text[:50]}{'...' if len(text) > 50 else ''}'")
+                
+                # 对于Final结果，即使重复也应该处理，直接返回True
+                if is_final:
+                    print(f"[GoogleSTTStream] ✅ Final result accepted despite repetition")
+                    return True
             else:
                 self._repeat_count = 0  # 重置重复计数器
             
