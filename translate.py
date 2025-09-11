@@ -198,6 +198,92 @@ def get_translation_stats() -> dict:
     }
 
 
+async def translate_zh_to_en_async(text: str, max_retries: int = 2) -> str:
+    """
+    中文到英文的异步翻译函数 - 增加重试机制和更好的错误处理
+    """
+    if not text or len(text.strip()) == 0:
+        return ""
+    
+    text = text.strip()
+    _translation_stats['total_requests'] += 1
+    
+    # 检查缓存 (使用不同的缓存key避免冲突)
+    cache_key = f"zh_to_en:{text}"
+    if cache_key in _translation_cache:
+        _translation_stats['cache_hits'] += 1
+        print(f"[TranslateAsync] 💡 Cache hit (ZH->EN): '{text[:30]}{'...' if len(text) > 30 else ''}'")
+        return _translation_cache[cache_key]
+    
+    # 尝试Google Translate（带重试机制）
+    for attempt in range(max_retries + 1):
+        try:
+            print(f"[TranslateAsync] 🔄 Google Translate attempt {attempt + 1}/{max_retries + 1} (ZH->EN): '{text[:50]}{'...' if len(text) > 50 else ''}'")
+            
+            def _sync_google_translate_zh_to_en(text: str) -> str:
+                translate_client = translate.Client()
+                result = translate_client.translate(
+                    values=[text],
+                    target_language='en',
+                    source_language='zh-CN'
+                )
+                if result and len(result) > 0:
+                    return result[0]['translatedText']
+                else:
+                    raise Exception("Google Translate returned empty result")
+            
+            # 在线程池中执行同步操作
+            loop = asyncio.get_event_loop()
+            translation = await loop.run_in_executor(None, _sync_google_translate_zh_to_en, text)
+            
+            _translation_stats['google_success'] += 1
+            _translation_cache[cache_key] = translation
+            print(f"[TranslateAsync] ✅ Google Translate success (ZH->EN): '{text}' -> '{translation}'")
+            return translation
+            
+        except Exception as e:
+            _translation_stats['retries'] += 1
+            print(f"[TranslateAsync] ❌ Google Translate attempt {attempt + 1} failed (ZH->EN): {e}")
+            if attempt < max_retries:
+                await asyncio.sleep(1.0 * (attempt + 1))  # 递增延迟
+    
+    # Google翻译失败，尝试MyMemory（免费API）
+    try:
+        print(f"[TranslateAsync] 🔄 Trying MyMemory API (ZH->EN): '{text[:50]}{'...' if len(text) > 50 else ''}'")
+        
+        # MyMemory API 参数
+        url = "https://api.mymemory.translated.net/get"
+        params = {
+            'q': text,
+            'langpair': 'zh-CN|en'
+        }
+        
+        timeout = aiohttp.ClientTimeout(total=4)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.get(url, params=params) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    if data.get('responseStatus') == 200:
+                        translation = data['responseData']['translatedText']
+                        
+                        _translation_stats['mymemory_success'] += 1
+                        _translation_cache[cache_key] = translation
+                        print(f"[TranslateAsync] ✅ MyMemory success (ZH->EN): '{text}' -> '{translation}'")
+                        return translation
+                    else:
+                        raise Exception(f"MyMemory API error: {data.get('responseDetails', 'Unknown error')}")
+                else:
+                    raise Exception(f"MyMemory HTTP {response.status}")
+                    
+    except Exception as e:
+        print(f"[TranslateAsync] ❌ MyMemory failed (ZH->EN): {e}")
+    
+    # 所有翻译方法都失败，返回原文
+    _translation_stats['failures'] += 1
+    print(f"[TranslateAsync] ⚠️ All translation methods failed (ZH->EN), returning original text: '{text}'")
+    return text
+
+
 def reset_translation_stats():
     """重置翻译统计信息"""
     global _translation_stats

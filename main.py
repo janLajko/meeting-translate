@@ -8,7 +8,7 @@ from fastapi.responses import PlainTextResponse
 from fastapi.middleware.cors import CORSMiddleware
 import asyncio
 from asr import GoogleSTTStream  # 使用真实的Google STT进行中英文混合识别
-from translate import translate_en_to_zh_async, get_translation_stats
+from translate import translate_en_to_zh_async, translate_zh_to_en_async, get_translation_stats
 
 # 语言处理工具函数
 def has_sentence_ending_punctuation(text: str) -> bool:
@@ -254,9 +254,9 @@ async def stream(ws: WebSocket):
             
             # 智能翻译决策 - 使用双重验证
             if final_language.startswith('zh') or has_chinese:
-                # 中文内容直接显示，不翻译
-                zh_text = text
-                print(f"[Backend] 🇨🇳 Chinese content detected - displaying as-is: '{text}'")
+                # 中文内容翻译为英文
+                zh_text = await translate_zh_to_en_async(text, max_retries=2)
+                print(f"[Backend] 🇨🇳 Chinese content detected - translating to English: '{text}' -> '{zh_text}'")
                 detection_info = f"Lang:{final_language}, Chars:{has_chinese}"
                 print(f"[Backend] 🔍 Chinese detection details: {detection_info}")
             else:
