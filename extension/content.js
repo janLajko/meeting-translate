@@ -104,11 +104,12 @@ function createSubtitleContainer() {
   container.style.cssText = `
     position: fixed !important;
     left: 50% !important;
-    bottom: 8% !important;
+    bottom: 3% !important;
     transform: translateX(-50%) !important;
-    max-width: 70vw !important;
-    max-height: 40vh !important;
+    max-width: 55vw !important;
+    max-height: 20vh !important;
     overflow-y: auto !important;
+    scroll-behavior: smooth !important;
     font-family: system-ui, -apple-system, Segoe UI, Roboto, "PingFang SC", "Noto Sans CJK", Arial, sans-serif !important;
     z-index: 2147483647 !important;
     padding: 8px 12px !important;
@@ -120,6 +121,9 @@ function createSubtitleContainer() {
     transition: opacity 0.3s ease !important;
     opacity: ${subtitlesVisible ? '1' : '0'} !important;
     display: ${subtitlesVisible ? 'block' : 'none'} !important;
+    /* 自定义滚动条 */
+    scrollbar-width: thin !important;
+    scrollbar-color: rgba(255, 255, 255, 0.4) rgba(255, 255, 255, 0.1) !important;
   `;
   
   document.body.appendChild(container);
@@ -764,6 +768,13 @@ function renderLine({ en, zh, isFinal }) {
   // 渲染所有字幕（历史 + 当前）
   renderSubtitlesWithCurrent(subtitleText, isFinal);
   
+  // 自动滚动到底部显示最新内容
+  if (container && isFinal) {
+    setTimeout(() => {
+      container.scrollTop = container.scrollHeight;
+    }, 50); // 短暂延迟确保内容已渲染
+  }
+  
   console.log(`[Content] 📍 Rendered subtitles - Final: ${isFinal}, Current: ${subtitleText.substring(0, 50)}`);
   
   // 设置字幕自动消失（15秒后）
@@ -790,26 +801,26 @@ function renderSubtitlesWithCurrent(currentText, isFinal) {
     let opacity, fontSize, fontWeight;
     if (displayHistory.length === 1) {
       opacity = '0.8';
-      fontSize = '20px';
+      fontSize = '18px';
       fontWeight = '450';
     } else if (isOldest) {
       opacity = '0.6';
-      fontSize = '18px';
+      fontSize = '16px';
       fontWeight = '400';
     } else {
       opacity = '0.8';
-      fontSize = '20px';
+      fontSize = '18px';
       fontWeight = '450';
     }
     
-    line.className = 'subtitle-line history';
+    line.className = `subtitle-line history ${isOldest ? 'first' : ''}`;
     line.style.cssText = `
-      margin: 4px 0 !important;
+      margin: 2px 0 !important;
       line-height: 1.3 !important;
       color: #fff !important;
       text-shadow: 0 1px 2px rgba(0,0,0,0.7) !important;
       background: rgba(0,0,0,${isOldest ? '0.4' : '0.5'}) !important;
-      padding: 8px 12px !important;
+      padding: ${isOldest ? '4px 8px' : '6px 10px'} !important;
       border-radius: 8px !important;
       border: 1px solid rgba(255,255,255,0.08) !important;
       opacity: ${opacity} !important;
@@ -838,12 +849,12 @@ function renderSubtitlesWithCurrent(currentText, isFinal) {
     
     currentLine.className = `subtitle-line ${isPartial ? 'partial' : 'current'}`;
     currentLine.style.cssText = `
-      margin: 8px 0 !important;
+      margin: ${isPartial ? '4px 0' : '8px 0'} !important;
       line-height: 1.3 !important;
       color: #fff !important;
       text-shadow: 0 1px 2px rgba(0,0,0,0.7) !important;
       background: rgba(0,0,0,${isPartial ? '0.65' : '0.7'}) !important;
-      padding: 12px 16px !important;
+      padding: ${isPartial ? '8px 12px' : '12px 16px'} !important;
       border-radius: 8px !important;
       border: ${isPartial ? '2px dashed rgba(255,255,255,0.3)' : '1px solid rgba(255,255,255,0.15)'} !important;
       opacity: 1 !important;

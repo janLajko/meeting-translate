@@ -249,6 +249,10 @@ chrome.runtime.onMessage.addListener(async (message) => {
       }
       
       // 设置WebSocket URL和流ID
+      // wsUrl = location.hostname === 'localhost' 
+      //   ? "ws://localhost:8080/stream"
+      //   : "ws://localhost:8080/stream";
+
       wsUrl = location.hostname === 'localhost' 
         ? "ws://localhost:8080/stream"
         : "wss://meeting-translate-1019079553349.asia-east2.run.app/stream";

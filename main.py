@@ -7,7 +7,8 @@ from fastapi import FastAPI, WebSocket
 from fastapi.responses import PlainTextResponse
 from fastapi.middleware.cors import CORSMiddleware
 import asyncio
-from asr import GoogleSTTStream  # 使用真实的Google STT进行中英文混合识别
+from stt_factory import create_stt_stream, STTFactory
+from config import Config
 from translate import translate_en_to_zh_async, translate_zh_to_en_async, get_translation_stats
 
 # 语言处理工具函数
@@ -301,12 +302,15 @@ async def stream(ws: WebSocket):
                 data = json.dumps({"en": text, "zh": text, "isFinal": is_final}, ensure_ascii=False)
                 message_queue.append(('send', data))
 
-    print("[Backend] Creating GoogleSTTStream...")
+    # 显示STT引擎状态
+    STTFactory.print_engine_status()
+    
+    print(f"[Backend] Creating STT stream using {Config.get_stt_engine().value} engine...")
     stt = None
     stt_rebuild_count = 0
     max_rebuild_attempts = 5
     
-    def create_stt_stream():
+    def create_stt_instance():
         nonlocal stt, stt_rebuild_count
         try:
             if stt:
@@ -315,14 +319,22 @@ async def stream(ws: WebSocket):
             
             stt_rebuild_count += 1
             print(f"[Backend] Creating STT stream (attempt {stt_rebuild_count})")
-            stt = GoogleSTTStream(
-                on_partial=on_partial, 
+            
+            # 使用工厂模式创建STT流
+            stt = create_stt_stream(
+                on_partial=on_partial,
                 on_final=on_final,
-                language="en-US",
-                alt_langs=["zh-CN"]  # 添加简体中文作为备选语言
+                debug=Config.DEBUG_MODE
             )
-            print("[Backend] ✅ GoogleSTTStream created successfully")
-            return True
+            
+            # 连接到STT服务
+            if stt.connect():
+                print(f"[Backend] ✅ STT stream created and connected successfully ({stt.__class__.__name__})")
+                return True
+            else:
+                print(f"[Backend] ❌ STT stream created but failed to connect")
+                return False
+                
         except Exception as e:
             print(f"[Backend] ❌ Failed to create STT stream: {e}")
             return False
@@ -337,7 +349,7 @@ async def stream(ws: WebSocket):
         return True
     
     # 初始创建STT流
-    if not create_stt_stream():
+    if not create_stt_instance():
         print("[Backend] ❌ Failed to create initial STT stream")
         return
 
@@ -357,7 +369,7 @@ async def stream(ws: WebSocket):
                     if not stt.is_healthy():
                         print(f"[Backend] ⚠️ STT health check failed, may need rebuild")
                         if should_rebuild_stt():
-                            create_stt_stream()
+                            create_stt_instance()
                 
                 # 翻译统计报告
                 try:
@@ -468,7 +480,7 @@ async def stream(ws: WebSocket):
                                     # 检查是否需要重建
                                     if not stt.is_healthy() and should_rebuild_stt():
                                         print(f"[Backend] 🔄 STT stream unhealthy, rebuilding...")
-                                        if create_stt_stream():
+                                        if create_stt_instance():
                                             # 重试推送，但不强制
                                             stt.push(audio_data)
                             else:
@@ -481,7 +493,7 @@ async def stream(ws: WebSocket):
                                               f"queue_size={stats.get('queue_size', 0)}")
                                     
                                     print(f"[Backend] 🔄 Attempting STT stream rebuild...")
-                                    if create_stt_stream():
+                                    if create_stt_instance():
                                         # 只在重建成功后推送
                                         stt.push(audio_data)
                                     else:

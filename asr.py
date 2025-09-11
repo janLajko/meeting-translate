@@ -7,18 +7,20 @@ import queue as sync_queue
 from typing import Callable, Optional
 
 from google.cloud import speech_v1 as speech
+from stt_base import STTStreamBase, STTStatus
 
 # 说明：输入必须是 16kHz、LINEAR16、单声道 PCM（与扩展发送的数据一致）
 ASR_SAMPLE_RATE = 16000
 ASR_ENCODING = speech.RecognitionConfig.AudioEncoding.LINEAR16
 
-class GoogleSTTStream:
+class GoogleSTTStream(STTStreamBase):
     """
     改进的Google STT流实现：
     - 使用队列架构避免阻塞
     - 异步结果处理
     - 智能健康检查
     - 优雅的错误处理和资源清理
+    - 符合STTStreamBase抽象接口
     """
     def __init__(
         self,
@@ -26,11 +28,14 @@ class GoogleSTTStream:
         on_final: Callable[[str, str], None],    # 增加语言参数: (text, language_code)
         language: str = "en-US",
         alt_langs: Optional[list[str]] = None,
+        sample_rate: int = ASR_SAMPLE_RATE,
+        debug: bool = False
     ) -> None:
+        # 初始化基类
+        super().__init__(on_partial, on_final, language, sample_rate, debug)
+        
+        # Google STT特定配置
         self._client = speech.SpeechClient()
-        self._on_partial = on_partial
-        self._on_final = on_final
-        self._language = language
         self._alt_langs = alt_langs or []
 
         # 状态管理
@@ -60,16 +65,51 @@ class GoogleSTTStream:
         # 配置Google STT
         self._streaming_config = self._create_streaming_config()
         
-        print(f"[GoogleSTTStream] 🚀 Initializing STT - Language: {self._language}, Alt: {self._alt_langs}")
-        self._start_threads()
+        print(f"[GoogleSTTStream] 🚀 Initializing STT - Language: {self.language}, Alt: {self._alt_langs}")
+        
+        # 设置初始状态
+        self._set_status(STTStatus.DISCONNECTED)
+        
         print(f"[GoogleSTTStream] ✅ STT stream initialized successfully")
+
+    def connect(self) -> bool:
+        """建立Google STT连接 - 实现抽象方法"""
+        try:
+            self._set_status(STTStatus.CONNECTING)
+            
+            # 如果线程未启动，现在启动
+            if not self._recognition_thread or not self._recognition_thread.is_alive():
+                self._start_threads()
+            
+            self._set_status(STTStatus.CONNECTED)
+            self._increment_stat("connection_count")
+            
+            with self._stats_lock:
+                if not self._stats["start_time"]:
+                    self._stats["start_time"] = time.time()
+            
+            return True
+        except Exception as e:
+            self._set_status(STTStatus.ERROR)
+            self._handle_error(e, "Google STT连接")
+            return False
+
+    def _reconnect(self) -> bool:
+        """重连实现 - 实现抽象方法"""
+        self._increment_stat("reconnection_count")
+        if self.debug:
+            print("[GoogleSTT] 尝试重连...")
+        
+        self.close()
+        time.sleep(2)  # 等待清理完成
+        return self.connect()
 
     def _create_streaming_config(self):
         """创建Google STT配置"""
         config = speech.RecognitionConfig(
             encoding=ASR_ENCODING,
-            sample_rate_hertz=ASR_SAMPLE_RATE,
-            language_code=self._language,
+            sample_rate_hertz=self.sample_rate,
+            language_code=self.language,
             alternative_language_codes=self._alt_langs,
             enable_automatic_punctuation=True,
             model="latest_long",
@@ -100,15 +140,18 @@ class GoogleSTTStream:
         self._result_thread = threading.Thread(target=self._result_worker, daemon=True)
         self._result_thread.start()
     
-    def push(self, chunk: bytes) -> bool:
-        """投递音频数据"""
+    def push(self, audio_data: bytes) -> bool:
+        """推送音频数据 - 实现抽象方法"""
         if self._closed:
-            print(f"[GoogleSTTStream] ⚠️ Stream closed, ignoring {len(chunk)} bytes")
+            print(f"[GoogleSTTStream] ⚠️ Stream closed, ignoring {len(audio_data)} bytes")
             return False
             
         try:
-            self._audio_queue.put(chunk, timeout=1.0)
-            self._bytes_sent += len(chunk)
+            self._audio_queue.put(audio_data, timeout=1.0)
+            self._bytes_sent += len(audio_data)
+            self._increment_stat("total_bytes_sent", len(audio_data))
+            self._update_activity()
+            self._set_status(STTStatus.STREAMING)
             
             # 减少日志频率
             if self._bytes_sent % 50000 == 0:  # 每50KB记录一次
@@ -117,19 +160,20 @@ class GoogleSTTStream:
             return True
             
         except sync_queue.Full:
-            print(f"[GoogleSTTStream] ⚠️ Audio queue full, dropping {len(chunk)} bytes")
+            print(f"[GoogleSTTStream] ⚠️ Audio queue full, dropping {len(audio_data)} bytes")
             return False
         except Exception as e:
-            print(f"[GoogleSTTStream] ❌ Error pushing audio: {e}")
+            self._handle_error(e, "音频推送")
             return False
 
     def close(self) -> None:
-        """关闭STT流并清理资源"""
+        """关闭STT流并清理资源 - 实现抽象方法"""
         if self._closed:
             return
             
         print(f"[GoogleSTTStream] 🔚 Closing STT stream...")
         self._closed = True
+        self._set_status(STTStatus.CLOSED)
         
         # 发送结束信号到队列
         try:
@@ -253,9 +297,9 @@ class GoogleSTTStream:
                 is_final = result.is_final
                 
                 # 提取语言检测信息
-                language_code = getattr(result, 'language_code', self._language)
+                language_code = getattr(result, 'language_code', self.language)
                 if not language_code:
-                    language_code = self._language  # 使用默认语言作为后备
+                    language_code = self.language  # 使用默认语言作为后备
                 
                 if transcript:
                     # 发送结果到结果队列
@@ -312,21 +356,19 @@ class GoogleSTTStream:
                     transcript = result_data['transcript']
                     confidence = result_data['confidence']
                     is_final = result_data['is_final']
-                    language_code = result_data.get('language_code', self._language)
+                    language_code = result_data.get('language_code', self.language)
                     
                     # 健康检查
                     if not self._handle_transcript(transcript, is_final):
                         print(f"[GoogleSTTStream] ⚠️ Health check failed, stopping result worker")
                         break
                     
-                    # 调用回调，传递语言代码
+                    # 使用基类的结果处理方法
                     try:
                         if is_final:
-                            self._on_final(transcript, language_code)
-                            print(f"[GoogleSTTStream] ✅ Final: '{transcript}' (lang: {language_code}, conf: {confidence:.2f})")
+                            self._handle_final_result(transcript, language_code)
                         else:
-                            self._on_partial(transcript, language_code)
-                            print(f"[GoogleSTTStream] 📋 Partial: '{transcript}' (lang: {language_code}, conf: {confidence:.2f})")
+                            self._handle_partial_result(transcript, language_code)
                     except Exception as callback_error:
                         print(f"[GoogleSTTStream] ❌ Callback error: {callback_error}")
                     
@@ -362,22 +404,33 @@ class GoogleSTTStream:
             print(f"[GoogleSTTStream] ⚠️ Error clearing queues: {e}")
 
     def is_healthy(self) -> bool:
-        """检查流是否健康 - 供外部调用"""
+        """检查流是否健康 - 扩展基类实现"""
+        # 调用基类健康检查
+        if not super().is_healthy():
+            return False
+        
+        # Google STT特定健康检查
         return not self._closed and self._check_stream_health()
     
     def get_stats(self) -> dict:
-        """获取流统计信息"""
-        runtime = time.time() - self._start_ts
-        return {
-            'runtime': runtime,
-            'bytes_sent': self._bytes_sent,
-            'queue_size': self._audio_queue.qsize(),
-            'result_queue_size': self._result_queue.qsize(),
-            'repeat_count': self._repeat_count,
-            'consecutive_empty_count': self._consecutive_empty_count,
-            'last_response_age': time.time() - self._last_response_time,
-            'last_transcript_length': len(self._last_transcript),
-            'last_final_transcript_length': len(self._last_final_transcript),
-            'is_healthy': self.is_healthy(),
-            'is_closed': self._closed
-        }
+        """获取流统计信息 - 扩展基类实现"""
+        # 获取基类统计信息
+        stats = super().get_stats()
+        
+        # 添加Google STT特定统计
+        stats.update({
+            'engine': 'google',
+            'google_stats': {
+                'bytes_sent_total': self._bytes_sent,
+                'audio_queue_size': self._audio_queue.qsize(),
+                'result_queue_size': self._result_queue.qsize(),
+                'repeat_count': self._repeat_count,
+                'consecutive_empty_count': self._consecutive_empty_count,
+                'last_response_age': time.time() - self._last_response_time,
+                'last_transcript_length': len(self._last_transcript),
+                'last_final_transcript_length': len(self._last_final_transcript),
+                'is_closed': self._closed
+            }
+        })
+        
+        return stats
