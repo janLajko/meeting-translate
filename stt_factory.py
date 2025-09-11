@@ -125,7 +125,7 @@ class STTFactory:
             deepgram_config = {
                 "api_key": api_key,
                 "language": config.get("language", "multi"),
-                "model": config.get("model", "nova-3"),
+                "model": config.get("model", "nova-2"),
                 "smart_format": config.get("smart_format", True),
                 "interim_results": config.get("interim_results", True),
                 "endpointing": config.get("endpointing", 300),

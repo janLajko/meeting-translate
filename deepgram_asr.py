@@ -58,7 +58,7 @@ class DeepgramSTTStream(STTStreamBase):
         on_final: callable,
         api_key: str,
         language: str = "multi",
-        model: str = "nova-3",
+        model: str = "nova-2",
         smart_format: bool = True,
         interim_results: bool = True,
         endpointing: int = 300,
@@ -73,7 +73,7 @@ class DeepgramSTTStream(STTStreamBase):
             on_final: 最终结果回调
             api_key: Deepgram API密钥
             language: 语言设置 ("multi"支持多语言)
-            model: 使用的模型 (默认nova-3)
+            model: 使用的模型 (默认nova-2)
             smart_format: 是否启用智能格式化
             interim_results: 是否返回部分结果
             endpointing: 停顿检测时间(ms)
