@@ -43,20 +43,23 @@ html body #__gather_subtitles_container__ .subtitle-line {
     display: block !important;
     visibility: visible !important;
     opacity: 1 !important;
-    background: rgba(255,0,0,0.1) !important;
-    padding: 4px !important;
-    border-radius: 4px !important;
+    background: rgba(0,0,0,0.6) !important;
+    padding: 12px 16px !important;
+    border-radius: 8px !important;
+    border: 1px solid rgba(255,255,255,0.1) !important;
+    animation: fadeIn 0.3s ease-in !important;
 }
 
 html body #__gather_subtitles_container__ .subtitle-line .zh { 
-    font-size: 20px !important; 
-    font-weight: 600 !important;
+    font-size: 22px !important; 
+    font-weight: 500 !important;
     color: #fff !important;
     margin: 0 !important;
     display: block !important;
     text-shadow: 0 1px 2px rgba(0,0,0,0.9) !important;
-    line-height: 1.4 !important;
+    line-height: 1.5 !important;
     text-align: center !important;
+    letter-spacing: 0.5px !important;
 }
 
 /* 字幕开关按钮样式 */
@@ -91,5 +94,28 @@ html body #__gather_subtitles_toggle__:hover {
 
 html body #__gather_subtitles_toggle__:active {
     transform: scale(0.95) !important;
+}
+
+/* 字幕动画效果 */
+@keyframes fadeIn {
+    from {
+        opacity: 0;
+        transform: translateY(10px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+@keyframes fadeOut {
+    from {
+        opacity: 1;
+        transform: translateY(0);
+    }
+    to {
+        opacity: 0;
+        transform: translateY(-10px);
+    }
 }
   

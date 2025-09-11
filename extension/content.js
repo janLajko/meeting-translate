@@ -284,6 +284,16 @@ if (location.hostname.includes('youtube.com') || location.hostname.includes('mee
         container.innerHTML = '';
         console.log('[Debug] Cleared all subtitles');
       }
+      // 清理新的字幕状态
+      if (currentSubtitle) {
+        currentSubtitle = null;
+      }
+      if (subtitleTimeout) {
+        clearTimeout(subtitleTimeout);
+        subtitleTimeout = null;
+      }
+      lastSubtitleText = '';
+      console.log('[Debug] Cleared subtitle state variables');
     },
     
     // 新增调试工具
@@ -372,8 +382,47 @@ if (location.hostname.includes('youtube.com') || location.hostname.includes('mee
         containerInDOM: container ? document.contains(container) : false,
         toggleButtonExists: !!toggleButton,
         toggleButtonInDOM: toggleButton ? document.contains(toggleButton) : false,
-        localStorage: localStorage.getItem('gather_subtitles_visible')
+        localStorage: localStorage.getItem('gather_subtitles_visible'),
+        // 新增状态信息
+        currentSubtitle: !!currentSubtitle,
+        lastSubtitleText: lastSubtitleText,
+        hasTimeout: !!subtitleTimeout,
+        containerChildrenCount: container ? container.children.length : 0
       };
+    },
+    
+    // 新增：测试单一字幕显示
+    testSingleSubtitle: function(text = "单一字幕测试") {
+      console.log('[Debug] Testing single subtitle display...');
+      renderLine({
+        en: "Single subtitle test",
+        zh: text,
+        isFinal: true
+      });
+      return { success: true, message: `Displayed: ${text}` };
+    },
+    
+    // 新增：连续测试多条字幕
+    testMultipleSubtitles: function() {
+      console.log('[Debug] Testing multiple subtitles (should replace each other)...');
+      const subtitles = [
+        "第一条字幕测试",
+        "第二条字幕测试",
+        "第三条字幕测试"
+      ];
+      
+      subtitles.forEach((text, index) => {
+        setTimeout(() => {
+          renderLine({
+            en: `Test subtitle ${index + 1}`,
+            zh: text,
+            isFinal: true
+          });
+          console.log(`[Debug] Displayed subtitle ${index + 1}: ${text}`);
+        }, index * 2000); // 2秒间隔
+      });
+      
+      return { success: true, message: `Will display ${subtitles.length} subtitles with 2s interval` };
     }
   };
   
@@ -404,6 +453,8 @@ if (location.hostname.includes('youtube.com') || location.hostname.includes('mee
   
   console.log('[Content] 💡 Debug tools available:');
   console.log('- window.debugSubtitles.testSubtitle() - Test subtitle display');
+  console.log('- window.debugSubtitles.testSingleSubtitle() - Test single subtitle (NEW)');
+  console.log('- window.debugSubtitles.testMultipleSubtitles() - Test multiple replacing subtitles (NEW)');
   console.log('- window.debugSubtitles.showContainer() - Show container info');  
   console.log('- window.debugSubtitles.recreateContainer() - Recreate container');
   console.log('- window.debugSubtitles.clearSubtitles() - Clear all subtitles');
@@ -413,7 +464,7 @@ if (location.hostname.includes('youtube.com') || location.hostname.includes('mee
   console.log('- window.debugSubtitles.toggleSubtitles() - Toggle subtitle visibility');
   console.log('- window.debugSubtitles.showSubtitles() - Force show subtitles');
   console.log('- window.debugSubtitles.hideSubtitles() - Force hide subtitles');
-  console.log('- window.debugSubtitles.getSubtitleState() - Get subtitle system state');
+  console.log('- window.debugSubtitles.getSubtitleState() - Get subtitle system state (ENHANCED)');
   console.log('- Ctrl+Shift+T - Quick test subtitle');
   console.log('- Ctrl+H or Escape - Toggle subtitle visibility');
 }
@@ -485,6 +536,11 @@ startHeartbeat();
 // 通知background script content script已就绪
 console.log('[Content] 🚀 Content script initialized and ready');
 
+// 用于记录当前字幕状态
+let currentSubtitle = null;
+let subtitleTimeout = null;
+let lastSubtitleText = '';
+
 function renderLine({ en, zh, isFinal }) {
   console.log('[Content] 🎨 Rendering subtitle line:', { en, zh, isFinal });
   
@@ -499,41 +555,72 @@ function renderLine({ en, zh, isFinal }) {
     return;
   }
   
-  // 添加测试可见性
+  const subtitleText = zh || en || "";
+  
+  // 防止重复显示相同内容
+  if (subtitleText === lastSubtitleText && isFinal) {
+    console.log('[Content] 🔄 Skipping duplicate subtitle:', subtitleText);
+    return;
+  }
+  
+  // 只处理 final 结果，避免 partial 结果造成闪烁
+  if (!isFinal) {
+    console.log('[Content] ⏳ Skipping partial result:', subtitleText.substring(0, 30));
+    return;
+  }
+  
+  // 清除现有的字幕和定时器
+  if (currentSubtitle && currentSubtitle.parentNode) {
+    currentSubtitle.remove();
+  }
+  if (subtitleTimeout) {
+    clearTimeout(subtitleTimeout);
+  }
+  
+  // 创建新的字幕元素
   const line = document.createElement("div");
-  line.className = "subtitle-line" + (isFinal ? " final" : "");
+  line.className = "subtitle-line final";
   line.style.cssText = `
     margin: 6px 0 !important;
     line-height: 1.3 !important;
     color: #fff !important;
     text-shadow: 0 1px 2px rgba(0,0,0,0.7) !important;
-    background: rgba(255,0,0,0.2) !important;
-    padding: 4px !important;
-    border-radius: 4px !important;
+    background: rgba(0,0,0,0.6) !important;
+    padding: 12px 16px !important;
+    border-radius: 8px !important;
+    animation: fadeIn 0.3s ease-in !important;
+    border: 1px solid rgba(255,255,255,0.1) !important;
   `;
   
-  // 只显示中文字幕，不显示英文
+  // 只显示翻译后的中文字幕
   line.innerHTML = `
-    <div class="zh" style="font-size: 20px !important; font-weight: 600 !important; margin: 0 !important; line-height: 1.4 !important; text-align: center !important;">${escapeHtml(zh || en || "")}</div>
+    <div class="zh" style="font-size: 22px !important; font-weight: 500 !important; margin: 0 !important; line-height: 1.5 !important; text-align: center !important; letter-spacing: 0.5px !important;">${escapeHtml(subtitleText)}</div>
   `;
   
+  // 清空容器并添加新字幕
+  container.innerHTML = '';
   container.appendChild(line);
-  container.scrollTop = container.scrollHeight;
   
-  console.log('[Content] 📍 Subtitle line added to container');
-  console.log('[Content] Container children count:', container.children.length);
-  console.log('[Content] Container visibility:', getComputedStyle(container).visibility);
-  console.log('[Content] Container display:', getComputedStyle(container).display);
+  // 更新状态
+  currentSubtitle = line;
+  lastSubtitleText = subtitleText;
   
-  // 临时字幕自动消失
-  if (!isFinal) {
-    setTimeout(() => {
-      if (line.parentNode) {
-        line.remove();
-        console.log('[Content] 🗑️ Temporary subtitle removed');
-      }
-    }, 8000);
-  }
+  console.log('[Content] 📍 NEW subtitle displayed:', subtitleText.substring(0, 50));
+  
+  // 设置字幕自动消失（8秒后）
+  subtitleTimeout = setTimeout(() => {
+    if (line && line.parentNode) {
+      line.style.animation = 'fadeOut 0.3s ease-out';
+      setTimeout(() => {
+        if (line.parentNode) {
+          line.remove();
+          console.log('[Content] 🗑️ Subtitle auto-removed after timeout');
+        }
+      }, 300);
+    }
+    currentSubtitle = null;
+    lastSubtitleText = '';
+  }, 8000);
 }
 
 function escapeHtml(s) {

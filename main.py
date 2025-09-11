@@ -200,7 +200,7 @@ async def stream(ws: WebSocket):
                 language_stats['last_detected_languages'].pop(0)
             
             # 添加到翻译队列
-            message_queue.append(('smart_translate', {'text': text, 'language': detected_language}))
+            message_queue.append(('smart_translate', {'text': text, 'language': detected_language, 'is_final': is_final}))
             
             # 清空缓冲区
             partial_text_buffer['content'] = ''
@@ -286,7 +286,7 @@ async def stream(ws: WebSocket):
                 data = json.dumps({"en": text, "zh": text, "isFinal": True}, ensure_ascii=False)
                 message_queue.append(('send', data))
 
-    async def smart_translate_and_update(text: str, language_code: str, retry_count: int = 0):
+    async def smart_translate_and_update(text: str, language_code: str, is_final: bool = True, retry_count: int = 0):
         """智能翻译函数 - 根据检测到的语言决定是否翻译（增强版含去重）"""
         nonlocal last_sent_translation
         max_retries = 1
@@ -324,12 +324,13 @@ async def stream(ws: WebSocket):
             last_sent_translation = translation_key
             
             # 发送结果
-            data = json.dumps({"en": text, "zh": zh_text, "isFinal": True}, ensure_ascii=False)
+            data = json.dumps({"en": text, "zh": zh_text, "isFinal": is_final}, ensure_ascii=False)
             message_queue.append(('send', data))
             
             # 增强日志记录
+            final_status = "FINAL" if is_final else "PARTIAL"
             char_analysis = f"Chinese chars: {has_chinese}, Lang detection: {final_language}"
-            print(f"[Backend] 📤 NEW translation queued ({len(zh_text)} chars) - {char_analysis}")
+            print(f"[Backend] 📤 NEW translation queued ({len(zh_text)} chars) - {char_analysis} - Status: {final_status}")
             
         except Exception as e:
             error_type = type(e).__name__
@@ -338,11 +339,12 @@ async def stream(ws: WebSocket):
             if retry_count < max_retries:
                 print(f"[Backend] 🔄 Retrying smart translation ({retry_count + 1}/{max_retries})")
                 await asyncio.sleep(1.0 * (retry_count + 1))
-                await smart_translate_and_update(text, language_code, retry_count + 1)
+                await smart_translate_and_update(text, language_code, is_final, retry_count + 1)
             else:
-                print(f"[Backend] ❌ Smart translation failed after {max_retries + 1} attempts, sending original text")
+                final_status = "FINAL" if is_final else "PARTIAL"
+                print(f"[Backend] ❌ Smart translation failed after {max_retries + 1} attempts, sending original text - Status: {final_status}")
                 # 发送原文作为最后选择
-                data = json.dumps({"en": text, "zh": text, "isFinal": True}, ensure_ascii=False)
+                data = json.dumps({"en": text, "zh": text, "isFinal": is_final}, ensure_ascii=False)
                 message_queue.append(('send', data))
 
     print("[Backend] Creating GoogleSTTStream...")
@@ -470,8 +472,9 @@ async def stream(ws: WebSocket):
                             # 启动智能翻译任务
                             text = data['text']
                             language = data['language']
-                            asyncio.create_task(smart_translate_and_update(text, language))
-                            print(f"[Backend] 🧠 Started smart translation task for: '{text}' (lang: {language})")
+                            is_final = data.get('is_final', True)  # 默认为True保持兼容性
+                            asyncio.create_task(smart_translate_and_update(text, language, is_final))
+                            print(f"[Backend] 🧠 Started smart translation task for: '{text}' (lang: {language}, final: {is_final})")
                         elif action == 'send':
                             # 发送消息
                             await ws.send_text(data)
