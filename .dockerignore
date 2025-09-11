@@ -32,3 +32,7 @@ extension/
 # Documentation
 README.md
 CLAUDE.md
+
+# Test files (不需要部署到生产环境)
+test_*.py
+*_test.py

@@ -2,12 +2,14 @@
 """
 Deepgram语音识别包装类
 实现STTStreamBase接口，提供与GoogleSTTStream兼容的API
+使用async WebSocket接口 (SDK 4.7.0+)
 """
 
 import asyncio
 import json
 import threading
 import time
+import queue
 from typing import Optional, Dict, Any
 import logging
 
@@ -92,7 +94,12 @@ class DeepgramSTTStream(STTStreamBase):
         # Deepgram客户端和连接
         self.client: Optional[DeepgramClient] = None
         self.connection = None
-        self.connection_lock = threading.Lock()
+        
+        # 异步运行时控制
+        self.loop = None
+        self.loop_thread = None
+        self._audio_queue = queue.Queue()
+        self._should_stop = threading.Event()
         
         # 重连控制
         self.max_reconnect_attempts = 5
@@ -116,52 +123,37 @@ class DeepgramSTTStream(STTStreamBase):
         try:
             self._set_status(STTStatus.CONNECTING)
             
-            # 创建Deepgram客户端
-            self.client = DeepgramClient(self.api_key)
+            # 停止之前的连接
+            if self.loop_thread and self.loop_thread.is_alive():
+                self._should_stop.set()
+                self.loop_thread.join(timeout=3)
             
-            with self.connection_lock:
-                # 创建WebSocket连接
-                self.connection = self.client.listen.websocket.v("1")
-                
-                # 设置事件处理器
-                self.connection.on(LiveTranscriptionEvents.Open, self._on_open)
-                self.connection.on(LiveTranscriptionEvents.Transcript, self._on_transcript)
-                self.connection.on(LiveTranscriptionEvents.Close, self._on_close)
-                self.connection.on(LiveTranscriptionEvents.Error, self._on_error)
-                self.connection.on(LiveTranscriptionEvents.Metadata, self._on_metadata)
-                
-                # 配置选项
-                options = LiveOptions(
-                    model=self.model,
-                    language=self.language,
-                    smart_format=self.smart_format,
-                    interim_results=self.interim_results,
-                    endpointing=self.endpointing,
-                    sample_rate=self.sample_rate,
-                    encoding="linear16",  # PCM 16位
-                    channels=1  # 单声道
-                )
-                
-                # 启动连接
-                success = self.connection.start(options)
-                
-                if success:
-                    self._set_status(STTStatus.CONNECTED)
-                    self._increment_stat("connection_count")
-                    self._connection_errors = 0
-                    self.current_reconnect_attempts = 0
-                    
-                    with self._stats_lock:
-                        if not self._stats["start_time"]:
-                            self._stats["start_time"] = time.time()
-                    
+            # 重置状态
+            self._should_stop.clear()
+            
+            # 启动异步事件循环线程
+            self.loop_thread = threading.Thread(target=self._run_async_loop, daemon=True)
+            self.loop_thread.start()
+            
+            # 等待连接建立
+            max_wait = 10  # 最多等待10秒
+            start_time = time.time()
+            
+            while time.time() - start_time < max_wait:
+                if self.get_status() == STTStatus.CONNECTED:
                     if self.debug:
                         print("[DeepgramSTT] ✅ 连接成功")
                     return True
-                else:
-                    self._set_status(STTStatus.ERROR)
-                    self._handle_error(Exception("Deepgram连接启动失败"), "连接")
+                elif self.get_status() == STTStatus.ERROR:
+                    if self.debug:
+                        print("[DeepgramSTT] ❌ 连接失败")
                     return False
+                time.sleep(0.1)
+            
+            # 连接超时
+            self._set_status(STTStatus.ERROR)
+            self._handle_error(Exception("Deepgram连接超时"), "连接")
+            return False
                     
         except Exception as e:
             self._set_status(STTStatus.ERROR)
@@ -169,26 +161,120 @@ class DeepgramSTTStream(STTStreamBase):
             self._connection_errors += 1
             return False
     
+    def _run_async_loop(self):
+        """在独立线程中运行异步事件循环"""
+        try:
+            self.loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(self.loop)
+            self.loop.run_until_complete(self._async_connect_and_listen())
+        except Exception as e:
+            self._handle_error(e, "异步循环")
+        finally:
+            if self.loop:
+                self.loop.close()
+    
+    async def _async_connect_and_listen(self):
+        """异步连接和监听Deepgram"""
+        try:
+            # 创建Deepgram客户端
+            self.client = DeepgramClient(self.api_key)
+            
+            # 创建WebSocket连接 - 使用asyncwebsocket
+            self.connection = self.client.listen.asyncwebsocket.v("1")
+            
+            # 设置事件处理器
+            self.connection.on(LiveTranscriptionEvents.Open, self._on_open)
+            self.connection.on(LiveTranscriptionEvents.Transcript, self._on_message)
+            self.connection.on(LiveTranscriptionEvents.Close, self._on_close) 
+            self.connection.on(LiveTranscriptionEvents.Error, self._on_error)
+            self.connection.on(LiveTranscriptionEvents.Metadata, self._on_metadata)
+            
+            # 配置选项
+            options = LiveOptions(
+                model=self.model,
+                language=self.language,
+                smart_format=self.smart_format,
+                interim_results=self.interim_results,
+                endpointing=self.endpointing,
+                sample_rate=self.sample_rate,
+                encoding="linear16",  # PCM 16位
+                channels=1  # 单声道
+            )
+            
+            # 启动连接
+            if await self.connection.start(options):
+                self._set_status(STTStatus.CONNECTED)
+                self._increment_stat("connection_count")
+                self._connection_errors = 0
+                self.current_reconnect_attempts = 0
+                
+                with self._stats_lock:
+                    if not self._stats["start_time"]:
+                        self._stats["start_time"] = time.time()
+                
+                # 启动音频发送协程
+                await asyncio.gather(
+                    self._audio_sender(),
+                    self._keep_alive()
+                )
+            else:
+                self._set_status(STTStatus.ERROR)
+                self._handle_error(Exception("Deepgram连接启动失败"), "连接")
+                
+        except Exception as e:
+            self._set_status(STTStatus.ERROR)
+            self._handle_error(e, "异步连接")
+    
+    async def _audio_sender(self):
+        """音频发送协程"""
+        while not self._should_stop.is_set():
+            try:
+                # 从队列获取音频数据，非阻塞
+                audio_data = None
+                try:
+                    audio_data = self._audio_queue.get_nowait()
+                except queue.Empty:
+                    await asyncio.sleep(0.01)  # 10ms
+                    continue
+                
+                if audio_data and self.connection:
+                    await self.connection.send(audio_data)
+                    self._increment_stat("total_bytes_sent", len(audio_data))
+                    self._update_activity()
+                    
+            except Exception as e:
+                self._handle_error(e, "音频发送")
+                break
+    
+    async def _keep_alive(self):
+        """保持连接活跃"""
+        while not self._should_stop.is_set():
+            await asyncio.sleep(30)  # 每30秒检查一次
+            if self.get_status() == STTStatus.CONNECTED:
+                # 可以发送keep-alive消息或检查连接状态
+                pass
+    
     def push(self, audio_data: bytes) -> bool:
         """推送音频数据到Deepgram"""
         if not audio_data or len(audio_data) == 0:
             return True
             
         try:
-            with self.connection_lock:
-                if not self.connection or self.get_status() == STTStatus.ERROR:
-                    if self.debug:
-                        print("[DeepgramSTT] ⚠️ 连接不可用，尝试重连")
-                    if not self._reconnect():
-                        return False
-                
-                # 发送音频数据
-                self.connection.send(audio_data)
+            if self.get_status() == STTStatus.ERROR:
+                if self.debug:
+                    print("[DeepgramSTT] ⚠️ 连接不可用，尝试重连")
+                if not self._reconnect():
+                    return False
+            
+            # 将音频数据放入队列，由async协程处理
+            try:
+                self._audio_queue.put_nowait(audio_data)
                 self._set_status(STTStatus.STREAMING)
-                self._increment_stat("total_bytes_sent", len(audio_data))
-                self._update_activity()
-                
                 return True
+            except queue.Full:
+                if self.debug:
+                    print("[DeepgramSTT] ⚠️ 音频队列已满，丢弃数据")
+                return False
                 
         except Exception as e:
             self._handle_error(e, "音频推送")
@@ -197,11 +283,28 @@ class DeepgramSTTStream(STTStreamBase):
     def close(self) -> None:
         """关闭Deepgram连接"""
         try:
-            with self.connection_lock:
-                if self.connection:
-                    self.connection.finish()
-                    self.connection = None
+            # 停止异步循环
+            self._should_stop.set()
+            
+            # 关闭连接
+            if self.connection and self.loop:
+                # 安全关闭异步连接
+                def close_connection():
+                    if self.connection:
+                        asyncio.run_coroutine_threadsafe(
+                            self.connection.finish(), self.loop
+                        )
+                
+                try:
+                    close_connection()
+                except:
+                    pass
+            
+            # 等待线程结束
+            if self.loop_thread and self.loop_thread.is_alive():
+                self.loop_thread.join(timeout=3)
                     
+            self.connection = None
             self.client = None
             self._set_status(STTStatus.CLOSED)
             
@@ -237,15 +340,15 @@ class DeepgramSTTStream(STTStreamBase):
         # 尝试重新连接
         return self.connect()
     
-    # Deepgram事件处理器
+    # Deepgram事件处理器 - 使用正确的SDK 4.7.0签名
     
-    def _on_open(self, *args, **kwargs):
+    async def _on_open(self, connection, open_response, **kwargs):
         """连接打开事件"""
         if self.debug:
             print("[DeepgramSTT] WebSocket连接已打开")
         self._set_status(STTStatus.CONNECTED)
     
-    def _on_close(self, *args, **kwargs):
+    async def _on_close(self, connection, close_response, **kwargs):
         """连接关闭事件"""
         if self.debug:
             print("[DeepgramSTT] WebSocket连接已关闭")
@@ -253,16 +356,16 @@ class DeepgramSTTStream(STTStreamBase):
         if self.get_status() != STTStatus.CLOSED:
             self._set_status(STTStatus.DISCONNECTED)
     
-    def _on_error(self, error, *args, **kwargs):
+    async def _on_error(self, connection, error, **kwargs):
         """错误事件"""
         self._handle_error(Exception(f"Deepgram WebSocket错误: {error}"), "WebSocket")
     
-    def _on_metadata(self, metadata, *args, **kwargs):
+    async def _on_metadata(self, connection, metadata, **kwargs):
         """元数据事件"""
         if self.debug:
             print(f"[DeepgramSTT] 收到元数据: {metadata}")
     
-    def _on_transcript(self, result, *args, **kwargs):
+    async def _on_message(self, connection, result, **kwargs):
         """转录结果事件"""
         try:
             # 解析结果
