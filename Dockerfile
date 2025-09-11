@@ -16,7 +16,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
-COPY main.py asr.py translate.py ./
+COPY *.py ./
 
 # Expose port
 EXPOSE 8080
