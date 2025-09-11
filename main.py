@@ -135,11 +135,15 @@ async def stream(ws: WebSocket):
         if len(text.strip()) == 0:
             return
         
-        # 去重检查 - 防止重复处理相同文本
+        # 去重检查 - 但Final结果优先处理
         text_key = f"{text.strip()}_{is_final}_{language_code}"
         if text_key in processed_texts or text.strip() == last_processed_text:
-            print(f"[Backend] 🔄 Skipping duplicate text: '{text[:30]}...', Final: {is_final}")
-            return
+            if not is_final:  # 只跳过 Partial 结果的重复
+                print(f"[Backend] 🔄 Skipping duplicate partial text: '{text[:30]}...', Final: {is_final}")
+                return
+            else:
+                print(f"[Backend] ✅ Processing duplicate final text (final result takes priority): '{text[:30]}...', Final: {is_final}")
+                # Final 结果即使重复也要处理，继续执行
             
         # 智能语言检测
         detected_language = detect_text_language(text, language_code)
