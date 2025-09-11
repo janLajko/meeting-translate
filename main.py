@@ -7,7 +7,7 @@ from fastapi import FastAPI, WebSocket
 from fastapi.responses import PlainTextResponse
 from fastapi.middleware.cors import CORSMiddleware
 import asyncio
-from asr import GoogleSTTStream  # Using mock for translation testing
+from asr import GoogleSTTStream  # 使用真实的Google STT进行中英文混合识别
 from translate import translate_en_to_zh_async, get_translation_stats
 
 # 语言处理工具函数
@@ -117,32 +117,37 @@ async def stream(ws: WebSocket):
         'min_chars_for_punctuation_check': 10  # 最少10个字符才检查标点
     }
     
+    # 文本去重机制 - 防止相同文本被重复处理
+    processed_texts = set()
+    last_processed_text = ""
+    last_sent_translation = ""
+    
     # 移除音频缓冲区 - 改为即时处理以降低延迟
     # audio_buffer = bytearray()
     # audio_buffer_size_threshold = 16000 * 2  # 32KB (约1秒音频数据)
     
-    # 发送字幕给前端（content.js 里会渲染）
-    def send_payload(en: str, zh: str, is_final: bool):
-        print(f"[Backend] Sending payload - EN: '{en}', ZH: '{zh}', Final: {is_final}")
-        try:
-            data = json.dumps({"en": en, "zh": zh, "isFinal": is_final}, ensure_ascii=False)
-        except Exception:
-            data = json.dumps({"en": en, "zh": zh, "isFinal": is_final})
-        # 将消息添加到队列而不是立即发送
-        message_queue.append(('send', data))
+    # 注意：已移除旧的send_payload函数，现在使用smart_translate_and_update统一处理
 
     def process_text_for_translation(text: str, language_code: str, is_final: bool = False, force_translate: bool = False):
-        """处理文本以决定是否触发翻译 - 统一的文本处理逻辑"""
+        """处理文本以决定是否触发翻译 - 统一的文本处理逻辑（含去重）"""
+        nonlocal last_processed_text, processed_texts
+        
         if len(text.strip()) == 0:
+            return
+        
+        # 去重检查 - 防止重复处理相同文本
+        text_key = f"{text.strip()}_{is_final}_{language_code}"
+        if text_key in processed_texts or text.strip() == last_processed_text:
+            print(f"[Backend] 🔄 Skipping duplicate text: '{text[:30]}...', Final: {is_final}")
             return
             
         # 智能语言检测
         detected_language = detect_text_language(text, language_code)
         
-        print(f"[Backend] 📝 Processing text: '{text[:50]}{'...' if len(text) > 50 else ''}' "
+        print(f"[Backend] 📝 Processing NEW text: '{text[:50]}{'...' if len(text) > 50 else ''}' "
               f"(STT: {language_code}, Detected: {detected_language}, Final: {is_final}, Force: {force_translate})")
         
-        # 决定是否触发翻译
+        # 决定是否触发翻译 - 更严格的条件
         should_translate = False
         trigger_reason = ""
         
@@ -151,12 +156,23 @@ async def stream(ws: WebSocket):
             trigger_reason = "is_final"
         elif force_translate:
             should_translate = True
-            trigger_reason = "force_translate"
+            trigger_reason = "force_translate"  
         elif has_sentence_ending_punctuation(text) and len(text.strip()) >= partial_text_buffer['min_chars_for_punctuation_check']:
-            should_translate = True
-            trigger_reason = "punctuation_detected"
+            # 只在partial结果中检测到标点符号时翻译
+            if not is_final:  # 确保这是partial结果
+                should_translate = True
+                trigger_reason = "punctuation_detected"
         
         if should_translate:
+            # 记录已处理的文本
+            processed_texts.add(text_key)
+            last_processed_text = text.strip()
+            
+            # 限制去重集合大小，防止内存泄露
+            if len(processed_texts) > 100:
+                # 清理最旧的一半记录
+                processed_texts = set(list(processed_texts)[-50:])
+            
             print(f"[Backend] 🚀 Triggering translation - Reason: {trigger_reason}")
             
             # 更新语言统计
@@ -186,11 +202,11 @@ async def stream(ws: WebSocket):
             # 添加到翻译队列
             message_queue.append(('smart_translate', {'text': text, 'language': detected_language}))
             
-            # 清空缓冲区（如果用的话）
+            # 清空缓冲区
             partial_text_buffer['content'] = ''
             partial_text_buffer['last_update'] = time.time()
         else:
-            print(f"[Backend] 📋 Not translating yet - Text: '{text[:30]}...', Length: {len(text)}, Has punctuation: {has_sentence_ending_punctuation(text)}")
+            print(f"[Backend] 📋 Not translating - Text: '{text[:30]}...', Length: {len(text)}, Has punct: {has_sentence_ending_punctuation(text)}, Final: {is_final}")
 
     # ASR 回调 - 支持智能标点触发翻译
     def on_partial(text: str, language_code: str):
@@ -271,7 +287,8 @@ async def stream(ws: WebSocket):
                 message_queue.append(('send', data))
 
     async def smart_translate_and_update(text: str, language_code: str, retry_count: int = 0):
-        """智能翻译函数 - 根据检测到的语言决定是否翻译（增强版）"""
+        """智能翻译函数 - 根据检测到的语言决定是否翻译（增强版含去重）"""
+        nonlocal last_sent_translation
         max_retries = 1
         
         try:
@@ -289,7 +306,6 @@ async def stream(ws: WebSocket):
                 # 中文内容直接显示，不翻译
                 zh_text = text
                 print(f"[Backend] 🇨🇳 Chinese content detected - displaying as-is: '{text}'")
-                # 记录中文检测情况
                 detection_info = f"Lang:{final_language}, Chars:{has_chinese}"
                 print(f"[Backend] 🔍 Chinese detection details: {detection_info}")
             else:
@@ -299,13 +315,21 @@ async def stream(ws: WebSocket):
                 elapsed_time = time.time() - start_time
                 print(f"[Backend] ✅ Translation completed in {elapsed_time:.2f}s: '{text}' -> '{zh_text}'")
             
+            # 去重检查 - 避免发送相同的翻译结果
+            translation_key = f"{text.strip()}_{zh_text.strip()}"
+            if translation_key == last_sent_translation:
+                print(f"[Backend] 🔄 Skipping duplicate translation result: '{zh_text[:30]}...'")
+                return
+                
+            last_sent_translation = translation_key
+            
             # 发送结果
             data = json.dumps({"en": text, "zh": zh_text, "isFinal": True}, ensure_ascii=False)
             message_queue.append(('send', data))
             
             # 增强日志记录
             char_analysis = f"Chinese chars: {has_chinese}, Lang detection: {final_language}"
-            print(f"[Backend] 📤 Smart translation queued ({len(zh_text)} chars) - {char_analysis}")
+            print(f"[Backend] 📤 NEW translation queued ({len(zh_text)} chars) - {char_analysis}")
             
         except Exception as e:
             error_type = type(e).__name__
