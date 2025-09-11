@@ -293,7 +293,10 @@ if (location.hostname.includes('youtube.com') || location.hostname.includes('mee
         subtitleTimeout = null;
       }
       lastSubtitleText = '';
-      console.log('[Debug] Cleared subtitle state variables');
+      lastPartialText = '';
+      currentPartialSubtitle = null;
+      subtitleHistory = []; // 清空历史缓存
+      console.log('[Debug] Cleared subtitle state variables and history');
     },
     
     // 新增调试工具
@@ -387,7 +390,9 @@ if (location.hostname.includes('youtube.com') || location.hostname.includes('mee
         currentSubtitle: !!currentSubtitle,
         lastSubtitleText: lastSubtitleText,
         hasTimeout: !!subtitleTimeout,
-        containerChildrenCount: container ? container.children.length : 0
+        containerChildrenCount: container ? container.children.length : 0,
+        subtitleHistoryCount: subtitleHistory.length,
+        subtitleHistory: subtitleHistory.map(s => s.text.substring(0, 30) + '...')
       };
     },
     
@@ -402,13 +407,15 @@ if (location.hostname.includes('youtube.com') || location.hostname.includes('mee
       return { success: true, message: `Displayed: ${text}` };
     },
     
-    // 新增：连续测试多条字幕
+    // 新增：连续测试多条字幕（现在会显示历史缓存）
     testMultipleSubtitles: function() {
-      console.log('[Debug] Testing multiple subtitles (should replace each other)...');
+      console.log('[Debug] Testing multiple subtitles with history cache...');
       const subtitles = [
-        "第一条字幕测试",
-        "第二条字幕测试",
-        "第三条字幕测试"
+        "第一条字幕测试 - 历史最旧",
+        "第二条字幕测试 - 历史中间", 
+        "第三条字幕测试 - 当前最新",
+        "第四条字幕测试 - 新的当前",
+        "第五条字幕测试 - 最终当前"
       ];
       
       subtitles.forEach((text, index) => {
@@ -419,10 +426,145 @@ if (location.hostname.includes('youtube.com') || location.hostname.includes('mee
             isFinal: true
           });
           console.log(`[Debug] Displayed subtitle ${index + 1}: ${text}`);
-        }, index * 2000); // 2秒间隔
+          console.log(`[Debug] History now has ${subtitleHistory.length} items`);
+        }, index * 3000); // 3秒间隔，给更多时间观察
       });
       
-      return { success: true, message: `Will display ${subtitles.length} subtitles with 2s interval` };
+      return { success: true, message: `Will display ${subtitles.length} subtitles with 3s interval, showing history cache` };
+    },
+    
+    // 新增：测试字幕历史功能
+    testSubtitleHistory: function() {
+      console.log('[Debug] Testing subtitle history functionality...');
+      
+      // 清空当前历史
+      subtitleHistory = [];
+      if (container) container.innerHTML = '';
+      
+      // 快速添加3条字幕来测试历史显示
+      const testSubtitles = [
+        "第一条字幕 - 最旧历史",
+        "第二条字幕 - 中间历史",
+        "第三条字幕 - 当前最新"
+      ];
+      
+      testSubtitles.forEach((text, index) => {
+        setTimeout(() => {
+          renderLine({
+            en: `History test ${index + 1}`,
+            zh: text,
+            isFinal: true
+          });
+        }, index * 1000); // 1秒间隔
+      });
+      
+      return { success: true, message: "Testing 3-subtitle history display" };
+    },
+    
+    // 新增：显示当前字幕历史状态
+    getSubtitleHistory: function() {
+      console.log('[Debug] Current subtitle history:');
+      subtitleHistory.forEach((subtitle, index) => {
+        console.log(`${index + 1}. ${subtitle.text} (${new Date(subtitle.timestamp).toLocaleTimeString()})`);
+      });
+      return {
+        count: subtitleHistory.length,
+        history: subtitleHistory,
+        maxSize: 3
+      };
+    },
+    
+    // 新增：清空字幕历史
+    clearSubtitleHistory: function() {
+      console.log('[Debug] Clearing subtitle history...');
+      subtitleHistory = [];
+      if (container) container.innerHTML = '';
+      lastSubtitleText = '';
+      lastPartialText = '';
+      currentPartialSubtitle = null;
+      return { success: true, message: 'Subtitle history cleared' };
+    },
+    
+    // 新增：测试部分结果显示
+    testPartialResults: function() {
+      console.log('[Debug] Testing partial results display...');
+      
+      const testSequence = [
+        { text: "Hello wo", isFinal: false, delay: 0 },
+        { text: "Hello world", isFinal: false, delay: 1000 },
+        { text: "Hello world how", isFinal: false, delay: 2000 },
+        { text: "Hello world how are", isFinal: false, delay: 3000 },
+        { text: "Hello world how are you", isFinal: true, delay: 4000 }
+      ];
+      
+      testSequence.forEach((item, index) => {
+        setTimeout(() => {
+          renderLine({
+            en: item.text,
+            zh: item.text + " (测试)",
+            isFinal: item.isFinal
+          });
+          console.log(`[Debug] ${item.isFinal ? 'Final' : 'Partial'}: "${item.text}"`);
+        }, item.delay);
+      });
+      
+      return { success: true, message: 'Testing partial->final sequence over 5 seconds' };
+    },
+    
+    // 新增：测试多轮部分结果
+    testMultiplePartialSequences: function() {
+      console.log('[Debug] Testing multiple partial sequences...');
+      
+      const sequences = [
+        [
+          { text: "第一句开始", isFinal: false, delay: 0 },
+          { text: "第一句开始了", isFinal: false, delay: 500 },
+          { text: "第一句开始了测试", isFinal: true, delay: 1000 }
+        ],
+        [
+          { text: "第二句正在", isFinal: false, delay: 2000 },
+          { text: "第二句正在进行", isFinal: false, delay: 2500 },
+          { text: "第二句正在进行中", isFinal: true, delay: 3000 }
+        ],
+        [
+          { text: "第三句最后", isFinal: false, delay: 4000 },
+          { text: "第三句最后的", isFinal: false, delay: 4500 },
+          { text: "第三句最后的测试", isFinal: true, delay: 5000 }
+        ]
+      ];
+      
+      sequences.forEach((sequence, seqIndex) => {
+        sequence.forEach((item, itemIndex) => {
+          setTimeout(() => {
+            renderLine({
+              en: `Sequence ${seqIndex + 1}`,
+              zh: item.text,
+              isFinal: item.isFinal
+            });
+            console.log(`[Debug] Seq${seqIndex + 1} ${item.isFinal ? 'Final' : 'Partial'}: "${item.text}"`);
+          }, item.delay);
+        });
+      });
+      
+      return { success: true, message: 'Testing 3 sequences of partial->final over 6 seconds' };
+    },
+    
+    // 新增：获取当前字幕状态（包括部分结果）
+    getCurrentSubtitleState: function() {
+      console.log('[Debug] Current subtitle state:');
+      console.log('- History count:', subtitleHistory.length);
+      console.log('- Last final text:', lastSubtitleText);
+      console.log('- Last partial text:', lastPartialText);
+      console.log('- Has partial subtitle:', !!currentPartialSubtitle);
+      
+      return {
+        historyCount: subtitleHistory.length,
+        history: subtitleHistory.map(s => ({ text: s.text.substring(0, 30), isFinal: s.isFinal })),
+        lastFinalText: lastSubtitleText,
+        lastPartialText: lastPartialText,
+        hasPartialSubtitle: !!currentPartialSubtitle,
+        containerChildren: container ? container.children.length : 0
+      };
     }
   };
   
@@ -451,10 +593,16 @@ if (location.hostname.includes('youtube.com') || location.hostname.includes('mee
     }
   });
   
-  console.log('[Content] 💡 Debug tools available:');
+  console.log('[Content] 💡 Debug tools available (with partial results support):');
   console.log('- window.debugSubtitles.testSubtitle() - Test subtitle display');
-  console.log('- window.debugSubtitles.testSingleSubtitle() - Test single subtitle (NEW)');
-  console.log('- window.debugSubtitles.testMultipleSubtitles() - Test multiple replacing subtitles (NEW)');
+  console.log('- window.debugSubtitles.testSingleSubtitle() - Test single subtitle');
+  console.log('- window.debugSubtitles.testMultipleSubtitles() - Test multiple subtitles with history cache');
+  console.log('- window.debugSubtitles.testSubtitleHistory() - Test 3-subtitle history display');
+  console.log('- window.debugSubtitles.testPartialResults() - Test partial->final sequence (NEW)');
+  console.log('- window.debugSubtitles.testMultiplePartialSequences() - Test multiple partial sequences (NEW)');
+  console.log('- window.debugSubtitles.getSubtitleHistory() - Show current subtitle history');
+  console.log('- window.debugSubtitles.getCurrentSubtitleState() - Get current state including partials (NEW)');
+  console.log('- window.debugSubtitles.clearSubtitleHistory() - Clear subtitle history');
   console.log('- window.debugSubtitles.showContainer() - Show container info');  
   console.log('- window.debugSubtitles.recreateContainer() - Recreate container');
   console.log('- window.debugSubtitles.clearSubtitles() - Clear all subtitles');
@@ -464,7 +612,7 @@ if (location.hostname.includes('youtube.com') || location.hostname.includes('mee
   console.log('- window.debugSubtitles.toggleSubtitles() - Toggle subtitle visibility');
   console.log('- window.debugSubtitles.showSubtitles() - Force show subtitles');
   console.log('- window.debugSubtitles.hideSubtitles() - Force hide subtitles');
-  console.log('- window.debugSubtitles.getSubtitleState() - Get subtitle system state (ENHANCED)');
+  console.log('- window.debugSubtitles.getSubtitleState() - Get subtitle system state (with history)');
   console.log('- Ctrl+Shift+T - Quick test subtitle');
   console.log('- Ctrl+H or Escape - Toggle subtitle visibility');
 }
@@ -536,10 +684,13 @@ startHeartbeat();
 // 通知background script content script已就绪
 console.log('[Content] 🚀 Content script initialized and ready');
 
-// 用于记录当前字幕状态
+// 用于记录字幕状态和历史缓存
 let currentSubtitle = null;
 let subtitleTimeout = null;
 let lastSubtitleText = '';
+let subtitleHistory = []; // 缓存最近3条 isFinal=true 的字幕
+let currentPartialSubtitle = null; // 当前显示的部分结果
+let lastPartialText = ''; // 最后的部分结果文本
 
 function renderLine({ en, zh, isFinal }) {
   console.log('[Content] 🎨 Rendering subtitle line:', { en, zh, isFinal });
@@ -557,70 +708,256 @@ function renderLine({ en, zh, isFinal }) {
   
   const subtitleText = zh || en || "";
   
-  // 防止重复显示相同内容
-  if (subtitleText === lastSubtitleText && isFinal) {
-    console.log('[Content] 🔄 Skipping duplicate subtitle:', subtitleText);
-    return;
+  if (isFinal) {
+    // 处理最终结果
+    console.log('[Content] ✅ Processing final result:', subtitleText.substring(0, 30));
+    
+    // 防止重复显示相同内容
+    if (subtitleText === lastSubtitleText) {
+      console.log('[Content] 🔄 Skipping duplicate final subtitle:', subtitleText);
+      return;
+    }
+    
+    // 添加到历史缓存
+    subtitleHistory.push({
+      text: subtitleText,
+      timestamp: Date.now(),
+      en: en || "",
+      zh: zh || "",
+      isFinal: true
+    });
+    
+    // 保持历史缓存最多3条
+    if (subtitleHistory.length > 3) {
+      subtitleHistory.shift(); // 移除最旧的
+    }
+    
+    console.log(`[Content] 📚 Updated subtitle history (${subtitleHistory.length}/3):`, 
+                subtitleHistory.map(s => s.text.substring(0, 20) + '...'));
+    
+    // 清除当前的部分结果
+    currentPartialSubtitle = null;
+    lastPartialText = '';
+    
+    // 更新状态
+    lastSubtitleText = subtitleText;
+    
+  } else {
+    // 处理部分结果
+    console.log('[Content] ⏳ Processing partial result:', subtitleText.substring(0, 30));
+    
+    // 防止重复显示相同的部分结果
+    if (subtitleText === lastPartialText) {
+      console.log('[Content] 🔄 Skipping duplicate partial subtitle:', subtitleText);
+      return;
+    }
+    
+    // 更新部分结果状态
+    lastPartialText = subtitleText;
   }
   
-  // 只处理 final 结果，避免 partial 结果造成闪烁
-  if (!isFinal) {
-    console.log('[Content] ⏳ Skipping partial result:', subtitleText.substring(0, 30));
-    return;
-  }
-  
-  // 清除现有的字幕和定时器
-  if (currentSubtitle && currentSubtitle.parentNode) {
-    currentSubtitle.remove();
-  }
+  // 清除现有的定时器
   if (subtitleTimeout) {
     clearTimeout(subtitleTimeout);
   }
   
-  // 创建新的字幕元素
-  const line = document.createElement("div");
-  line.className = "subtitle-line final";
-  line.style.cssText = `
-    margin: 6px 0 !important;
-    line-height: 1.3 !important;
-    color: #fff !important;
-    text-shadow: 0 1px 2px rgba(0,0,0,0.7) !important;
-    background: rgba(0,0,0,0.6) !important;
-    padding: 12px 16px !important;
-    border-radius: 8px !important;
-    animation: fadeIn 0.3s ease-in !important;
-    border: 1px solid rgba(255,255,255,0.1) !important;
-  `;
+  // 渲染所有字幕（历史 + 当前）
+  renderSubtitlesWithCurrent(subtitleText, isFinal);
   
-  // 只显示翻译后的中文字幕
-  line.innerHTML = `
-    <div class="zh" style="font-size: 22px !important; font-weight: 500 !important; margin: 0 !important; line-height: 1.5 !important; text-align: center !important; letter-spacing: 0.5px !important;">${escapeHtml(subtitleText)}</div>
-  `;
+  console.log(`[Content] 📍 Rendered subtitles - Final: ${isFinal}, Current: ${subtitleText.substring(0, 50)}`);
   
-  // 清空容器并添加新字幕
-  container.innerHTML = '';
-  container.appendChild(line);
-  
-  // 更新状态
-  currentSubtitle = line;
-  lastSubtitleText = subtitleText;
-  
-  console.log('[Content] 📍 NEW subtitle displayed:', subtitleText.substring(0, 50));
-  
-  // 设置字幕自动消失（8秒后）
+  // 设置字幕自动消失（15秒后）
   subtitleTimeout = setTimeout(() => {
-    if (line && line.parentNode) {
-      line.style.animation = 'fadeOut 0.3s ease-out';
-      setTimeout(() => {
-        if (line.parentNode) {
-          line.remove();
-          console.log('[Content] 🗑️ Subtitle auto-removed after timeout');
-        }
-      }, 300);
+    clearAllSubtitles();
+  }, 15000);
+}
+
+// 新函数：渲染字幕历史和当前字幕
+function renderSubtitlesWithCurrent(currentText, isFinal) {
+  if (!container) return;
+  
+  // 清空容器
+  container.innerHTML = '';
+  
+  // 1. 渲染历史字幕（只显示前面的，不包括最新的最终结果）
+  const displayHistory = isFinal ? subtitleHistory.slice(0, -1) : subtitleHistory;
+  
+  displayHistory.forEach((subtitle, index) => {
+    const line = document.createElement("div");
+    const isOldest = index === 0 && displayHistory.length > 1;
+    
+    // 历史字幕样式
+    let opacity, fontSize, fontWeight;
+    if (displayHistory.length === 1) {
+      opacity = '0.8';
+      fontSize = '20px';
+      fontWeight = '450';
+    } else if (isOldest) {
+      opacity = '0.6';
+      fontSize = '18px';
+      fontWeight = '400';
+    } else {
+      opacity = '0.8';
+      fontSize = '20px';
+      fontWeight = '450';
     }
-    currentSubtitle = null;
-    lastSubtitleText = '';
-  }, 8000);
+    
+    line.className = 'subtitle-line history';
+    line.style.cssText = `
+      margin: 4px 0 !important;
+      line-height: 1.3 !important;
+      color: #fff !important;
+      text-shadow: 0 1px 2px rgba(0,0,0,0.7) !important;
+      background: rgba(0,0,0,${isOldest ? '0.4' : '0.5'}) !important;
+      padding: 8px 12px !important;
+      border-radius: 8px !important;
+      border: 1px solid rgba(255,255,255,0.08) !important;
+      opacity: ${opacity} !important;
+      transition: all 0.3s ease !important;
+    `;
+    
+    line.innerHTML = `
+      <div class="zh" style="
+        font-size: ${fontSize} !important; 
+        font-weight: ${fontWeight} !important; 
+        margin: 0 !important; 
+        line-height: 1.5 !important; 
+        text-align: center !important; 
+        letter-spacing: 0.5px !important;
+        color: rgba(255,255,255,0.9) !important;
+      ">${escapeHtml(subtitle.text)}</div>
+    `;
+    
+    container.appendChild(line);
+  });
+  
+  // 2. 渲染当前字幕（最终结果或部分结果）
+  if (currentText && currentText.trim()) {
+    const currentLine = document.createElement("div");
+    const isPartial = !isFinal;
+    
+    currentLine.className = `subtitle-line ${isPartial ? 'partial' : 'current'}`;
+    currentLine.style.cssText = `
+      margin: 8px 0 !important;
+      line-height: 1.3 !important;
+      color: #fff !important;
+      text-shadow: 0 1px 2px rgba(0,0,0,0.7) !important;
+      background: rgba(0,0,0,${isPartial ? '0.65' : '0.7'}) !important;
+      padding: 12px 16px !important;
+      border-radius: 8px !important;
+      border: ${isPartial ? '2px dashed rgba(255,255,255,0.3)' : '1px solid rgba(255,255,255,0.15)'} !important;
+      opacity: 1 !important;
+      animation: ${isPartial ? 'pulse 1.5s ease-in-out infinite alternate' : 'fadeIn 0.3s ease-in'} !important;
+      transition: all 0.3s ease !important;
+      box-shadow: ${isPartial ? '0 0 10px rgba(255,255,255,0.1)' : '0 2px 8px rgba(0,0,0,0.3)'} !important;
+    `;
+    
+    currentLine.innerHTML = `
+      <div class="zh" style="
+        font-size: 22px !important; 
+        font-weight: ${isPartial ? '500' : '600'} !important; 
+        margin: 0 !important; 
+        line-height: 1.5 !important; 
+        text-align: center !important; 
+        letter-spacing: 0.5px !important;
+        color: ${isPartial ? 'rgba(255,255,255,0.95)' : '#fff'} !important;
+      ">${escapeHtml(currentText)}</div>
+    `;
+    
+    container.appendChild(currentLine);
+    currentPartialSubtitle = currentLine;
+  }
+}
+
+// 保留原有的渲染函数作为备用
+function renderSubtitleHistory() {
+  if (!container) return;
+  
+  // 清空容器
+  container.innerHTML = '';
+  
+  // 渲染所有历史字幕
+  subtitleHistory.forEach((subtitle, index) => {
+    const line = document.createElement("div");
+    const isLatest = index === subtitleHistory.length - 1;
+    const isFirst = index === 0;
+    
+    // 根据位置设置不同的样式
+    let opacity, fontSize, fontWeight;
+    if (subtitleHistory.length === 1) {
+      // 只有一条字幕
+      opacity = '1';
+      fontSize = '22px';
+      fontWeight = '500';
+    } else if (isLatest) {
+      // 最新字幕 - 高亮显示
+      opacity = '1';
+      fontSize = '22px';
+      fontWeight = '600';
+    } else if (subtitleHistory.length === 3 && isFirst) {
+      // 最旧字幕 - 较暗
+      opacity = '0.6';
+      fontSize = '18px';
+      fontWeight = '400';
+    } else {
+      // 中间字幕
+      opacity = '0.8';
+      fontSize = '20px';
+      fontWeight = '450';
+    }
+    
+    line.className = `subtitle-line ${isLatest ? 'current' : 'history'}`;
+    line.style.cssText = `
+      margin: ${isLatest ? '8px 0' : '4px 0'} !important;
+      line-height: 1.3 !important;
+      color: #fff !important;
+      text-shadow: 0 1px 2px rgba(0,0,0,0.7) !important;
+      background: rgba(0,0,0,${isLatest ? '0.7' : '0.5'}) !important;
+      padding: ${isLatest ? '12px 16px' : '8px 12px'} !important;
+      border-radius: 8px !important;
+      border: 1px solid rgba(255,255,255,${isLatest ? '0.15' : '0.08'}) !important;
+      opacity: ${opacity} !important;
+      animation: ${isLatest ? 'fadeIn 0.3s ease-in' : 'none'} !important;
+      transition: all 0.3s ease !important;
+    `;
+    
+    // 显示字幕文本
+    line.innerHTML = `
+      <div class="zh" style="
+        font-size: ${fontSize} !important; 
+        font-weight: ${fontWeight} !important; 
+        margin: 0 !important; 
+        line-height: 1.5 !important; 
+        text-align: center !important; 
+        letter-spacing: 0.5px !important;
+        color: ${isLatest ? '#fff' : 'rgba(255,255,255,0.9)'} !important;
+      ">${escapeHtml(subtitle.text)}</div>
+    `;
+    
+    container.appendChild(line);
+  });
+}
+
+// 新函数：清空所有字幕
+function clearAllSubtitles() {
+  if (container) {
+    // 添加淡出动画
+    const lines = container.querySelectorAll('.subtitle-line');
+    lines.forEach(line => {
+      line.style.animation = 'fadeOut 0.3s ease-out';
+    });
+    
+    setTimeout(() => {
+      container.innerHTML = '';
+      console.log('[Content] 🗑️ All subtitles auto-removed after timeout');
+    }, 300);
+  }
+  
+  // 清理所有状态
+  currentSubtitle = null;
+  currentPartialSubtitle = null;
+  lastSubtitleText = '';
+  lastPartialText = '';
 }
 
 function escapeHtml(s) {

@@ -126,7 +126,7 @@ async def stream(ws: WebSocket):
     # audio_buffer = bytearray()
     # audio_buffer_size_threshold = 16000 * 2  # 32KB (约1秒音频数据)
     
-    # 注意：已移除旧的send_payload函数，现在使用smart_translate_and_update统一处理
+    # 注意：已移除旧的send_payload和translate_and_update函数，现在使用smart_translate_and_update统一处理
 
     def process_text_for_translation(text: str, language_code: str, is_final: bool = False, force_translate: bool = False):
         """处理文本以决定是否触发翻译 - 统一的文本处理逻辑（含去重）"""
@@ -232,59 +232,6 @@ async def stream(ws: WebSocket):
         else:
             print(f"[Backend] Final text is empty, not processing")
 
-    async def translate_and_update(text: str, retry_count: int = 0):
-        """改进的异步翻译并更新结果 - 增加错误处理和监控"""
-        max_retries = 1  # 最多重试1次
-        
-        try:
-            print(f"[Backend] 🔄 Starting async translation (attempt {retry_count + 1}): '{text[:50]}{'...' if len(text) > 50 else ''}'")
-            
-            # 记录翻译开始时间
-            start_time = time.time()
-            
-            # 调用改进的翻译函数，包含内部重试机制
-            zh = await translate_en_to_zh_async(text, max_retries=2)
-            
-            # 记录翻译耗时
-            elapsed_time = time.time() - start_time
-            print(f"[Backend] ✅ Translation completed in {elapsed_time:.2f}s: '{text}' -> '{zh}'")
-            
-            # 验证翻译质量（基本检查）
-            if zh == text and len(text) > 10:  # 如果翻译结果与原文相同且原文较长，可能是翻译失败
-                print(f"[Backend] ⚠️ Translation may have failed (identical to source), but sending anyway")
-            
-            # 发送翻译结果
-            data = json.dumps({"en": text, "zh": zh, "isFinal": True}, ensure_ascii=False)
-            message_queue.append(('send', data))
-            
-            print(f"[Backend] 📤 Translation queued for sending: {len(zh)} chars")
-            
-        except asyncio.TimeoutError:
-            print(f"[Backend] ⏰ Translation timeout for: '{text[:50]}{'...' if len(text) > 50 else ''}'")
-            if retry_count < max_retries:
-                print(f"[Backend] 🔄 Retrying translation ({retry_count + 1}/{max_retries})")
-                # 延迟重试
-                await asyncio.sleep(1.0 * (retry_count + 1))
-                await translate_and_update(text, retry_count + 1)
-            else:
-                print(f"[Backend] ❌ Translation timeout after {max_retries + 1} attempts, sending original text")
-                # 发送原文
-                data = json.dumps({"en": text, "zh": text, "isFinal": True}, ensure_ascii=False)
-                message_queue.append(('send', data))
-                
-        except Exception as e:
-            error_type = type(e).__name__
-            print(f"[Backend] ❌ Translation error ({error_type}): {e}")
-            
-            if retry_count < max_retries:
-                print(f"[Backend] 🔄 Retrying translation due to {error_type} ({retry_count + 1}/{max_retries})")
-                await asyncio.sleep(1.0 * (retry_count + 1))
-                await translate_and_update(text, retry_count + 1)
-            else:
-                print(f"[Backend] ❌ Translation failed after {max_retries + 1} attempts, sending original text")
-                # 发送原文作为最后选择
-                data = json.dumps({"en": text, "zh": text, "isFinal": True}, ensure_ascii=False)
-                message_queue.append(('send', data))
 
     async def smart_translate_and_update(text: str, language_code: str, is_final: bool = True, retry_count: int = 0):
         """智能翻译函数 - 根据检测到的语言决定是否翻译（增强版含去重）"""
@@ -464,11 +411,7 @@ async def stream(ws: WebSocket):
                     item = message_queue.pop(0)
                     if isinstance(item, tuple) and len(item) == 2:
                         action, data = item
-                        if action == 'translate':
-                            # 启动传统异步翻译任务（保留兼容性）
-                            asyncio.create_task(translate_and_update(data))
-                            print(f"[Backend] 🔄 Started translation task for: '{data}'")
-                        elif action == 'smart_translate':
+                        if action == 'smart_translate':
                             # 启动智能翻译任务
                             text = data['text']
                             language = data['language']

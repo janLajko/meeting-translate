@@ -118,4 +118,68 @@ html body #__gather_subtitles_toggle__:active {
         transform: translateY(-10px);
     }
 }
+
+/* 历史字幕样式 */
+html body #__gather_subtitles_container__ .subtitle-line.history {
+    background: rgba(0,0,0,0.5) !important;
+    opacity: 0.8 !important;
+    border: 1px solid rgba(255,255,255,0.08) !important;
+    margin: 4px 0 !important;
+    padding: 8px 12px !important;
+}
+
+html body #__gather_subtitles_container__ .subtitle-line.history:first-child {
+    opacity: 0.6 !important;
+    background: rgba(0,0,0,0.4) !important;
+}
+
+/* 当前字幕样式增强 */
+html body #__gather_subtitles_container__ .subtitle-line.current {
+    background: rgba(0,0,0,0.7) !important;
+    opacity: 1 !important;
+    border: 1px solid rgba(255,255,255,0.15) !important;
+    margin: 8px 0 !important;
+    padding: 12px 16px !important;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.3) !important;
+}
+
+/* 字幕容器调整以支持多行显示 */
+html body #__gather_subtitles_container__ {
+    max-height: 50vh !important;
+    overflow-y: auto !important;
+}
+
+/* 部分结果字幕样式 */
+html body #__gather_subtitles_container__ .subtitle-line.partial {
+    background: rgba(0,0,0,0.65) !important;
+    border: 2px dashed rgba(255,255,255,0.3) !important;
+    opacity: 1 !important;
+    margin: 8px 0 !important;
+    padding: 12px 16px !important;
+    box-shadow: 0 0 10px rgba(255,255,255,0.1) !important;
+}
+
+/* 部分结果脉搏动画 */
+@keyframes pulse {
+    0% {
+        opacity: 0.9;
+        box-shadow: 0 0 10px rgba(255,255,255,0.1);
+    }
+    100% {
+        opacity: 1;
+        box-shadow: 0 0 15px rgba(255,255,255,0.2);
+        border-color: rgba(255,255,255,0.4);
+    }
+}
+
+/* 当前最终结果字幕样式增强 */
+html body #__gather_subtitles_container__ .subtitle-line.current {
+    background: rgba(0,0,0,0.7) !important;
+    opacity: 1 !important;
+    border: 1px solid rgba(255,255,255,0.15) !important;
+    margin: 8px 0 !important;
+    padding: 12px 16px !important;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.3) !important;
+    animation: fadeIn 0.3s ease-in !important;
+}
   
