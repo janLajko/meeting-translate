@@ -82,7 +82,7 @@ class STTFactory:
             
             # 提取Google STT特定参数
             language = config.get("language", "en-US")
-            alt_langs = config.get("alternative_languages", ["cmn-Hans-CN"])
+            alt_langs = config.get("alternative_languages", ["cmn-Hans-CN","zh-CN"])
             sample_rate = config.get("sample_rate", 16000)
             debug = config.get("debug", False)
             
@@ -226,7 +226,7 @@ class STTFactory:
                 result["config"] = {
                     "credentials_path": Config.GOOGLE_APPLICATION_CREDENTIALS,
                     "language": "en-US",
-                    "alternative_languages": ["zh-CN"],
+                    "alternative_languages": ["cmn-Hans-CN"],
                     "running_on_gcp": Config._is_running_on_gcp()
                 }
         
