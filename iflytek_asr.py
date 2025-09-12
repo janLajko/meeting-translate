@@ -221,37 +221,55 @@ class IflytekSTTStream(STTStreamBase):
                 if chunk is None:
                     break
 
-                # 构造数据帧
-                data = base64.b64encode(chunk).decode('utf-8')
-                frame = {
-                    "common": {"app_id": self.appid},
-                    "business": {
-                        "domain": "iat",
-                        "language": self.business_language,
-                        "accent": self.business_accent,
-                        "ptt": self.business_ptt,
-                        # 关键：允许中英混说
-                        "rlang": self.business_rlang,
-                    },
-                    "data": {
-                        "status": 0 if not self._first_frame_sent else 1,
-                        "format": f"audio/L16;rate={self.sample_rate}",
-                        "encoding": "raw",
-                        "audio": data,
-                    },
-                }
+                # 按官方建议拆分为1280字节（约40ms @16kHz 16bit mono）的小帧
+                frame_size = 1280
+                offset = 0
+                while offset < len(chunk) and not self._stop_event.is_set():
+                    piece = chunk[offset: offset + frame_size]
+                    offset += frame_size
 
-                try:
-                    if self._ws:
-                        self._ws.send(json.dumps(frame))
-                        self._first_frame_sent = True
-                except Exception as e:
-                    self._handle_error(e, "发送音频帧")
-                    self._set_status(STTStatus.ERROR)
-                    break
+                    data_b64 = base64.b64encode(piece).decode('utf-8')
 
-                # 发送节流：官方建议每40ms~200ms一个帧，这里按队列节奏即可
-                time.sleep(0.04)
+                    if not self._first_frame_sent:
+                        # 首帧：包含common和business，status=0
+                        frame = {
+                            "common": {"app_id": self.appid},
+                            "business": {
+                                "domain": "iat",
+                                "language": self.business_language,
+                                "accent": self.business_accent,
+                                "ptt": self.business_ptt,
+                                "rlang": self.business_rlang,
+                            },
+                            "data": {
+                                "status": 0,
+                                "format": f"audio/L16;rate={self.sample_rate}",
+                                "encoding": "raw",
+                                "audio": data_b64,
+                            },
+                        }
+                    else:
+                        # 中间帧：仅data，status=1
+                        frame = {
+                            "data": {
+                                "status": 1,
+                                "format": f"audio/L16;rate={self.sample_rate}",
+                                "encoding": "raw",
+                                "audio": data_b64,
+                            }
+                        }
+
+                    try:
+                        if self._ws:
+                            self._ws.send(json.dumps(frame))
+                            self._first_frame_sent = True
+                    except Exception as e:
+                        self._handle_error(e, "发送音频帧")
+                        self._set_status(STTStatus.ERROR)
+                        break
+
+                    # 发送节流：每个小帧约40ms
+                    time.sleep(0.04)
 
         except Exception as e:
             self._handle_error(e, "发送线程")
@@ -432,4 +450,3 @@ def create_iflytek_stt(
         api_secret=api_secret,
         **kwargs,
     )
-
