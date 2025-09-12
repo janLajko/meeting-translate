@@ -52,7 +52,8 @@ class Config:
     IFLYTEK_APPID: Optional[str] = _env_strip("IFLYTEK_APPID")
     IFLYTEK_API_KEY: Optional[str] = _env_strip("IFLYTEK_API_KEY")
     IFLYTEK_API_SECRET: Optional[str] = _env_strip("IFLYTEK_API_SECRET")
-    IFLYTEK_HOSTURL: str = _env_strip("IFLYTEK_HOSTURL", "wss://iat-api.xfyun.cn/v2/iat")
+    # 官方示例与文档推荐使用 ws-api.xfyun.cn
+    IFLYTEK_HOSTURL: str = _env_strip("IFLYTEK_HOSTURL", "wss://ws-api.xfyun.cn/v2/iat")
     # 业务参数：默认中文普通话，开启中英混合（rlang=en_us）
     IFLYTEK_LANGUAGE: str = os.getenv("IFLYTEK_LANGUAGE", "zh_cn")
     IFLYTEK_ACCENT: str = os.getenv("IFLYTEK_ACCENT", "mandarin")

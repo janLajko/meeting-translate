@@ -48,6 +48,9 @@ class IflytekSTTStream(STTStreamBase):
         accent: str = "mandarin",
         ptt: int = 1,
         rlang: str = "en_us",
+        vad_eos: int = 10000,
+        vinfo: int = 1,
+        dwa: str = "wpgs",
         sample_rate: int = 16000,
         debug: bool = False,
     ):
@@ -64,6 +67,9 @@ class IflytekSTTStream(STTStreamBase):
         self.business_accent = accent
         self.business_ptt = ptt
         self.business_rlang = rlang
+        self.business_vad_eos = vad_eos
+        self.business_vinfo = vinfo
+        self.business_dwa = dwa
 
         # WS/线程
         self._ws: Optional[websocket.WebSocketApp] = None
@@ -89,8 +95,12 @@ class IflytekSTTStream(STTStreamBase):
 
     # ============ 连接与鉴权 ============
     def _rfc1123_date(self) -> str:
+        # 使用与官方demo一致的RFC1123格式，避免细微格式差异
+        from wsgiref.handlers import format_date_time
+        from time import mktime
         now = datetime.datetime.utcnow()
-        return now.strftime('%a, %d %b %Y %H:%M:%S GMT')
+        stamp = mktime(now.timetuple())
+        return format_date_time(stamp)
 
     def _build_auth_url(self) -> str:
         """按官方文档生成鉴权URL"""
@@ -115,7 +125,10 @@ class IflytekSTTStream(STTStreamBase):
             "date": date,
             "host": host,
         }
-        return f"{self.hosturl}?{urlencode(params)}"
+        full_url = f"{self.hosturl}?{urlencode(params)}"
+        if self.debug:
+            print(f"[iFlytekSTT] Auth URL parts -> host:{host}, path:{path}, date:{date}")
+        return full_url
 
     def connect(self) -> bool:
         try:
@@ -192,6 +205,9 @@ class IflytekSTTStream(STTStreamBase):
                     "accent": self.business_accent,
                     "ptt": self.business_ptt,
                     "rlang": self.business_rlang,
+                    "vad_eos": self.business_vad_eos,
+                    "vinfo": self.business_vinfo,
+                    "dwa": self.business_dwa,
                 },
                 "data": {
                     "status": 0,
@@ -276,6 +292,9 @@ class IflytekSTTStream(STTStreamBase):
                                 "accent": self.business_accent,
                                 "ptt": self.business_ptt,
                                 "rlang": self.business_rlang,
+                                "vad_eos": self.business_vad_eos,
+                                "vinfo": self.business_vinfo,
+                                "dwa": self.business_dwa,
                             },
                             "data": {
                                 "status": 0,
@@ -297,6 +316,8 @@ class IflytekSTTStream(STTStreamBase):
 
                     try:
                         if self._ws and self._ws.sock and self._ws.sock.connected:
+                            if self.debug and not self._first_frame_sent:
+                                print("[iFlytekSTT] 即将发送首帧(status=0) 音频")
                             self._ws.send(json.dumps(frame))
                             self._first_frame_sent = True
                     except Exception as e:
@@ -411,14 +432,6 @@ class IflytekSTTStream(STTStreamBase):
         # 发送结束帧（status=2）
         try:
             end_frame = {
-                "common": {"app_id": self.appid},
-                "business": {
-                    "domain": "iat",
-                    "language": self.business_language,
-                    "accent": self.business_accent,
-                    "ptt": self.business_ptt,
-                    "rlang": self.business_rlang,
-                },
                 "data": {
                     "status": 2,
                     "format": f"audio/L16;rate={self.sample_rate}",
