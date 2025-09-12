@@ -112,11 +112,13 @@ class GoogleSTTStream(STTStreamBase):
             language_code=self.language,
             alternative_language_codes=self._alt_langs,
             enable_automatic_punctuation=True,
-            model="latest_long",
+            # model="latest_long",
+            model="command_and_search",
             use_enhanced=True,
             enable_word_time_offsets=True,
             enable_word_confidence=True,
             max_alternatives=1,
+            audio_channel_count=2
         )
         
         return speech.StreamingRecognitionConfig(

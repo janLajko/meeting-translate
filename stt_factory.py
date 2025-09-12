@@ -82,7 +82,7 @@ class STTFactory:
             
             # 提取Google STT特定参数
             language = config.get("language", "en-US")
-            alt_langs = config.get("alternative_languages", ["zh-CN"])
+            alt_langs = config.get("alternative_languages", ["cmn-Hans-CN"])
             sample_rate = config.get("sample_rate", 16000)
             debug = config.get("debug", False)
             

@@ -113,7 +113,8 @@ class Config:
                 **base_config,
                 "credentials_path": cls.GOOGLE_APPLICATION_CREDENTIALS,
                 "language": "en-US",
-                "alternative_languages": ["zh-CN"]
+                "alternative_languages": ["cmn-Hans-CN"],
+                "audio_channel_count": 2
             }
         
         elif engine == STTEngine.DEEPGRAM:
