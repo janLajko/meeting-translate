@@ -44,10 +44,15 @@ class Config:
     DEEPGRAM_ENDPOINTING: int = int(os.getenv("DEEPGRAM_ENDPOINTING", "300"))
 
     # iFlytek（讯飞）配置
-    IFLYTEK_APPID: Optional[str] = os.getenv("IFLYTEK_APPID")
-    IFLYTEK_API_KEY: Optional[str] = os.getenv("IFLYTEK_API_KEY")
-    IFLYTEK_API_SECRET: Optional[str] = os.getenv("IFLYTEK_API_SECRET")
-    IFLYTEK_HOSTURL: str = os.getenv("IFLYTEK_HOSTURL", "wss://iat-api.xfyun.cn/v2/iat")
+    # 去除环境变量中的意外空格/换行，避免鉴权签名失败
+    def _env_strip(name: str, default: Optional[str] = None) -> Optional[str]:
+        val = os.getenv(name, default)
+        return val.strip() if isinstance(val, str) else val
+
+    IFLYTEK_APPID: Optional[str] = _env_strip("IFLYTEK_APPID")
+    IFLYTEK_API_KEY: Optional[str] = _env_strip("IFLYTEK_API_KEY")
+    IFLYTEK_API_SECRET: Optional[str] = _env_strip("IFLYTEK_API_SECRET")
+    IFLYTEK_HOSTURL: str = _env_strip("IFLYTEK_HOSTURL", "wss://iat-api.xfyun.cn/v2/iat")
     # 业务参数：默认中文普通话，开启中英混合（rlang=en_us）
     IFLYTEK_LANGUAGE: str = os.getenv("IFLYTEK_LANGUAGE", "zh_cn")
     IFLYTEK_ACCENT: str = os.getenv("IFLYTEK_ACCENT", "mandarin")
@@ -162,9 +167,10 @@ class Config:
         elif engine == STTEngine.IFLYTEK:
             return {
                 **base_config,
-                "appid": cls.IFLYTEK_APPID,
-                "api_key": cls.IFLYTEK_API_KEY,
-                "api_secret": cls.IFLYTEK_API_SECRET,
+                # 再次strip防御
+                "appid": cls._env_strip("IFLYTEK_APPID") or cls.IFLYTEK_APPID,
+                "api_key": cls._env_strip("IFLYTEK_API_KEY") or cls.IFLYTEK_API_KEY,
+                "api_secret": cls._env_strip("IFLYTEK_API_SECRET") or cls.IFLYTEK_API_SECRET,
                 "hosturl": cls.IFLYTEK_HOSTURL,
                 "language": cls.IFLYTEK_LANGUAGE,
                 "accent": cls.IFLYTEK_ACCENT,

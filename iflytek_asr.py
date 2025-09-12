@@ -178,6 +178,8 @@ class IflytekSTTStream(STTStreamBase):
 
     def _on_open(self, ws):
         self._connected_event.set()
+        # 确保重置首帧标记，严格让第一条消息为 status=0
+        self._first_frame_sent = False
 
     def _on_close(self, ws, *args):
         if self.debug:
@@ -213,6 +215,11 @@ class IflytekSTTStream(STTStreamBase):
     def _sender_worker(self):
         try:
             while not self._stop_event.is_set():
+                # 等待WS连接建立，避免在握手前发送任何数据帧
+                if not self._connected_event.is_set() or not self._ws or not getattr(self._ws, 'sock', None) or not self._ws.sock.connected:
+                    time.sleep(0.01)
+                    continue
+
                 try:
                     chunk = self._audio_queue.get(timeout=0.1)
                 except queue.Empty:
@@ -260,7 +267,7 @@ class IflytekSTTStream(STTStreamBase):
                         }
 
                     try:
-                        if self._ws:
+                        if self._ws and self._ws.sock and self._ws.sock.connected:
                             self._ws.send(json.dumps(frame))
                             self._first_frame_sent = True
                     except Exception as e:
@@ -280,7 +287,13 @@ class IflytekSTTStream(STTStreamBase):
             data = json.loads(message)
             code = data.get("code", -1)
             if code != 0:
-                self._handle_error(Exception(f"iFlytek error code={code}, msg={data.get('message')}"), "识别")
+                # 打印更多上下文，便于定位鉴权/参数问题
+                msg = data.get('message')
+                sid = data.get('sid')
+                hint = ""
+                if code == 10165:
+                    hint = " - 确认第一帧是否为status=0且包含common/business"
+                self._handle_error(Exception(f"iFlytek error code={code}, msg={msg}, sid={sid}{hint}"), "识别")
                 return
 
             payload = data.get("data", {})
