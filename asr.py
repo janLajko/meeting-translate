@@ -113,7 +113,7 @@ class GoogleSTTStream(STTStreamBase):
             alternative_language_codes=self._alt_langs,
             enable_automatic_punctuation=True,
             # model="latest_long",
-            model="command_and_search",
+            model="default",
             use_enhanced=True,
             enable_word_time_offsets=True,
             enable_word_confidence=True,
