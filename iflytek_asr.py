@@ -180,6 +180,35 @@ class IflytekSTTStream(STTStreamBase):
         self._connected_event.set()
         # 确保重置首帧标记，严格让第一条消息为 status=0
         self._first_frame_sent = False
+        # 立即发送一帧静音首帧，满足服务端“第一帧必须为status=0且带common/business”的要求
+        try:
+            silence = b"\x00" * 1280  # 约40ms的16k/16bit静音
+            data_b64 = base64.b64encode(silence).decode('utf-8')
+            first_frame = {
+                "common": {"app_id": self.appid},
+                "business": {
+                    "domain": "iat",
+                    "language": self.business_language,
+                    "accent": self.business_accent,
+                    "ptt": self.business_ptt,
+                    "rlang": self.business_rlang,
+                },
+                "data": {
+                    "status": 0,
+                    "format": f"audio/L16;rate={self.sample_rate}",
+                    "encoding": "raw",
+                    "audio": data_b64,
+                },
+            }
+            if self._ws and self._ws.sock and self._ws.sock.connected:
+                self._ws.send(json.dumps(first_frame))
+                self._first_frame_sent = True
+                if self.debug:
+                    print("[iFlytekSTT] 首帧(status=0) 静音包已发送")
+        except Exception as e:
+            # 首帧失败不致命，发送线程会在有音频时再尝试首帧
+            if self.debug:
+                print(f"[iFlytekSTT] 首帧静音发送失败: {e}")
 
     def _on_close(self, ws, *args):
         if self.debug:
