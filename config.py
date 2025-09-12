@@ -115,8 +115,8 @@ class Config:
             config = {
                 **base_config,
                 "language": "en-US",
-                "alternative_languages": ["cmn-Hans-CN"],
-                "audio_channel_count": 2,
+                "alternative_languages": ["zh-CN"],
+                "audio_channel_count": 1,
                 "running_on_gcp": cls._is_running_on_gcp()
             }
             
