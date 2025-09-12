@@ -79,8 +79,11 @@ class Config:
         
         # 验证STT引擎配置
         if cls.get_stt_engine() == STTEngine.GOOGLE:
-            if not cls.GOOGLE_APPLICATION_CREDENTIALS:
-                results["warnings"].append("GOOGLE_APPLICATION_CREDENTIALS未设置，可能影响Google STT功能")
+            # 在Google Cloud Run环境中，不需要显式设置GOOGLE_APPLICATION_CREDENTIALS
+            # Google Client Libraries会自动使用默认服务账号凭据
+            # 只有在本地开发且未设置凭据时才提示
+            if not cls.GOOGLE_APPLICATION_CREDENTIALS and not cls._is_running_on_gcp():
+                results["warnings"].append("GOOGLE_APPLICATION_CREDENTIALS未设置，在本地开发时可能需要设置")
         
         elif cls.get_stt_engine() == STTEngine.DEEPGRAM:
             if not cls.DEEPGRAM_API_KEY:
@@ -109,13 +112,19 @@ class Config:
         }
         
         if engine == STTEngine.GOOGLE:
-            return {
+            config = {
                 **base_config,
-                "credentials_path": cls.GOOGLE_APPLICATION_CREDENTIALS,
                 "language": "en-US",
                 "alternative_languages": ["cmn-Hans-CN"],
-                "audio_channel_count": 2
+                "audio_channel_count": 2,
+                "running_on_gcp": cls._is_running_on_gcp()
             }
+            
+            # 只在有显式凭据文件时才设置 credentials_path
+            if cls.GOOGLE_APPLICATION_CREDENTIALS:
+                config["credentials_path"] = cls.GOOGLE_APPLICATION_CREDENTIALS
+            
+            return config
         
         elif engine == STTEngine.DEEPGRAM:
             return {
@@ -154,6 +163,44 @@ class Config:
             print(f"  Deepgram语言: {cls.DEEPGRAM_LANGUAGE}")
         
         print()
+    
+    @classmethod
+    def _is_running_on_gcp(cls) -> bool:
+        """
+        检测是否运行在Google Cloud Platform上
+        
+        Returns:
+            bool: 如果在GCP上运行返回True，否则返回False
+        """
+        # 检查常见的GCP环境变量
+        gcp_indicators = [
+            "GOOGLE_CLOUD_PROJECT",  # 项目ID
+            "K_SERVICE",             # Cloud Run服务名
+            "GAE_APPLICATION",       # App Engine应用ID
+            "FUNCTION_NAME"          # Cloud Functions函数名
+        ]
+        
+        for indicator in gcp_indicators:
+            if os.getenv(indicator):
+                return True
+        
+        # 检查GCP元数据服务器
+        try:
+            import urllib.request
+            import urllib.error
+            
+            # GCP实例都有这个元数据端点
+            metadata_url = "http://metadata.google.internal/computeMetadata/v1/"
+            req = urllib.request.Request(metadata_url, headers={"Metadata-Flavor": "Google"})
+            
+            # 设置短超时，避免在非GCP环境中等待太久
+            with urllib.request.urlopen(req, timeout=1) as response:
+                return response.getcode() == 200
+        except (urllib.error.URLError, OSError, Exception):
+            # 无法访问元数据服务器，可能不在GCP上
+            pass
+        
+        return False
 
 
 # 创建全局配置实例

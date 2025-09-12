@@ -162,7 +162,7 @@ class STTFactory:
             engines[STTEngine.GOOGLE] = {
                 "available": True,
                 "version": getattr(google.cloud.speech, "__version__", "unknown"),
-                "config_valid": bool(Config.GOOGLE_APPLICATION_CREDENTIALS),
+                "config_valid": Config.GOOGLE_APPLICATION_CREDENTIALS is not None or Config._is_running_on_gcp(),
                 "description": "Google Cloud Speech-to-Text"
             }
         except ImportError:
@@ -218,14 +218,16 @@ class STTFactory:
         
         if engine == STTEngine.GOOGLE:
             # 验证Google STT配置
-            if not Config.GOOGLE_APPLICATION_CREDENTIALS:
-                result["warnings"].append("GOOGLE_APPLICATION_CREDENTIALS未设置")
+            # 在GCP环境中，不需要显式的凭据文件
+            if not Config.GOOGLE_APPLICATION_CREDENTIALS and not Config._is_running_on_gcp():
+                result["warnings"].append("GOOGLE_APPLICATION_CREDENTIALS未设置，在本地环境中可能需要设置")
             else:
                 result["valid"] = True
                 result["config"] = {
                     "credentials_path": Config.GOOGLE_APPLICATION_CREDENTIALS,
                     "language": "en-US",
-                    "alternative_languages": ["zh-CN"]
+                    "alternative_languages": ["zh-CN"],
+                    "running_on_gcp": Config._is_running_on_gcp()
                 }
         
         elif engine == STTEngine.DEEPGRAM:
