@@ -768,10 +768,23 @@ function renderLine({ en, zh, isFinal }) {
   // 渲染所有字幕（历史 + 当前）
   renderSubtitlesWithCurrent(subtitleText, isFinal);
   
-  // 自动滚动到底部显示最新内容
-  if (container && isFinal) {
+  // 自动滚动到底部显示最新内容 - 改进版本
+  if (container) {
     setTimeout(() => {
-      container.scrollTop = container.scrollHeight;
+      // 检查是否需要滚动指示器
+      const isScrollable = container.scrollHeight > container.clientHeight;
+      if (isScrollable) {
+        container.classList.add('scrollable');
+      } else {
+        container.classList.remove('scrollable');
+      }
+      
+      // 平滑滚动到底部
+      container.scrollTo({
+        top: container.scrollHeight,
+        behavior: 'smooth'
+      });
+      console.log(`[Content] 📜 Auto-scrolled to bottom - scrollHeight: ${container.scrollHeight}, clientHeight: ${container.clientHeight}, scrollable: ${isScrollable}`);
     }, 50); // 短暂延迟确保内容已渲染
   }
   

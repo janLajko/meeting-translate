@@ -5,7 +5,7 @@ html body #__gather_subtitles_container__ {
     bottom: 3% !important;
     transform: translateX(-50%) !important;
     max-width: 55vw !important;
-    max-height: 20vh !important;
+    max-height: 40vh !important;
     overflow-y: auto !important;
     font-family: system-ui, -apple-system, Segoe UI, Roboto, "PingFang SC", "Noto Sans CJK", Arial, sans-serif !important;
     z-index: 2147483647 !important;
@@ -15,6 +15,7 @@ html body #__gather_subtitles_container__ {
     backdrop-filter: saturate(150%) blur(6px) !important;
     pointer-events: none !important;
     border: 2px solid rgba(255,255,255,0.1) !important;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.3) !important;
     visibility: visible !important;
     display: block !important;
     opacity: 1 !important;
@@ -88,6 +89,10 @@ html body #__gather_subtitles_container__ .subtitle-line .zh {
     line-height: 1.5 !important;
     text-align: center !important;
     letter-spacing: 0.5px !important;
+    word-wrap: break-word !important;
+    word-break: break-word !important;
+    white-space: pre-wrap !important;
+    max-width: 100% !important;
 }
 
 /* 字幕开关按钮样式 */
@@ -199,6 +204,28 @@ html body #__gather_subtitles_container__ .subtitle-line.partial {
         box-shadow: 0 0 15px rgba(255,255,255,0.2);
         border-color: rgba(255,255,255,0.4);
     }
+}
+
+/* 滚动指示器 - 当有更多内容时显示 */
+html body #__gather_subtitles_container__::after {
+    content: "⬇️ 滚动查看更多" !important;
+    position: sticky !important;
+    bottom: 0 !important;
+    left: 0 !important;
+    right: 0 !important;
+    background: linear-gradient(transparent, rgba(0,0,0,0.9)) !important;
+    text-align: center !important;
+    font-size: 12px !important;
+    color: rgba(255,255,255,0.6) !important;
+    padding: 8px 4px 4px 4px !important;
+    pointer-events: none !important;
+    opacity: 0 !important;
+    transition: opacity 0.3s ease !important;
+}
+
+/* 只有在可滚动时才显示滚动指示器 */
+html body #__gather_subtitles_container__.scrollable::after {
+    opacity: 1 !important;
 }
 
 /* 当前最终结果字幕样式增强 */

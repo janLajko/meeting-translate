@@ -23,6 +23,7 @@ class STTEngine(Enum):
     """语音识别引擎枚举"""
     GOOGLE = "google"
     DEEPGRAM = "deepgram"
+    IFLYTEK = "iflytek"
 
 
 class Config:
@@ -41,6 +42,17 @@ class Config:
     DEEPGRAM_SMART_FORMAT: bool = os.getenv("DEEPGRAM_SMART_FORMAT", "true").lower() == "true"
     DEEPGRAM_INTERIM_RESULTS: bool = os.getenv("DEEPGRAM_INTERIM_RESULTS", "true").lower() == "true"
     DEEPGRAM_ENDPOINTING: int = int(os.getenv("DEEPGRAM_ENDPOINTING", "300"))
+
+    # iFlytek（讯飞）配置
+    IFLYTEK_APPID: Optional[str] = os.getenv("IFLYTEK_APPID")
+    IFLYTEK_API_KEY: Optional[str] = os.getenv("IFLYTEK_API_KEY")
+    IFLYTEK_API_SECRET: Optional[str] = os.getenv("IFLYTEK_API_SECRET")
+    IFLYTEK_HOSTURL: str = os.getenv("IFLYTEK_HOSTURL", "wss://iat-api.xfyun.cn/v2/iat")
+    # 业务参数：默认中文普通话，开启中英混合（rlang=en_us）
+    IFLYTEK_LANGUAGE: str = os.getenv("IFLYTEK_LANGUAGE", "zh_cn")
+    IFLYTEK_ACCENT: str = os.getenv("IFLYTEK_ACCENT", "mandarin")
+    IFLYTEK_PTT: int = int(os.getenv("IFLYTEK_PTT", "1"))
+    IFLYTEK_RLANG: str = os.getenv("IFLYTEK_RLANG", "en_us")
     
     # 音频配置
     AUDIO_SAMPLE_RATE: int = int(os.getenv("AUDIO_SAMPLE_RATE", "16000"))
@@ -89,6 +101,17 @@ class Config:
             if not cls.DEEPGRAM_API_KEY:
                 results["errors"].append("DEEPGRAM_API_KEY必须设置才能使用Deepgram STT")
                 results["valid"] = False
+        elif cls.get_stt_engine() == STTEngine.IFLYTEK:
+            missing = []
+            if not cls.IFLYTEK_APPID:
+                missing.append("IFLYTEK_APPID")
+            if not cls.IFLYTEK_API_KEY:
+                missing.append("IFLYTEK_API_KEY")
+            if not cls.IFLYTEK_API_SECRET:
+                missing.append("IFLYTEK_API_SECRET")
+            if missing:
+                results["errors"].append("缺少讯飞配置: " + ", ".join(missing))
+                results["valid"] = False
         
         # 验证音频参数
         if cls.AUDIO_SAMPLE_RATE not in [8000, 16000, 22050, 44100, 48000]:
@@ -135,6 +158,18 @@ class Config:
                 "smart_format": cls.DEEPGRAM_SMART_FORMAT,
                 "interim_results": cls.DEEPGRAM_INTERIM_RESULTS,
                 "endpointing": cls.DEEPGRAM_ENDPOINTING
+            }
+        elif engine == STTEngine.IFLYTEK:
+            return {
+                **base_config,
+                "appid": cls.IFLYTEK_APPID,
+                "api_key": cls.IFLYTEK_API_KEY,
+                "api_secret": cls.IFLYTEK_API_SECRET,
+                "hosturl": cls.IFLYTEK_HOSTURL,
+                "language": cls.IFLYTEK_LANGUAGE,
+                "accent": cls.IFLYTEK_ACCENT,
+                "ptt": cls.IFLYTEK_PTT,
+                "rlang": cls.IFLYTEK_RLANG,
             }
         
         return base_config

@@ -66,6 +66,8 @@ class STTFactory:
             return STTFactory._create_google_stt(on_partial, on_final, base_config)
         elif engine == STTEngine.DEEPGRAM:
             return STTFactory._create_deepgram_stt(on_partial, on_final, base_config)
+        elif engine == STTEngine.IFLYTEK:
+            return STTFactory._create_iflytek_stt(on_partial, on_final, base_config)
         else:
             raise ValueError(f"不支持的STT引擎: {engine}")
     
@@ -144,6 +146,42 @@ class STTFactory:
             raise ImportError(f"Deepgram STT依赖缺失: {e}")
         except Exception as e:
             raise Exception(f"创建Deepgram STT失败: {e}")
+
+    @staticmethod
+    def _create_iflytek_stt(
+        on_partial: Callable,
+        on_final: Callable,
+        config: Dict[str, Any]
+    ) -> STTStreamBase:
+        """创建iFlytek (讯飞) STT流实例"""
+        try:
+            from iflytek_asr import IflytekSTTStream
+
+            # 基本配置校验
+            appid = config.get("appid")
+            api_key = config.get("api_key")
+            api_secret = config.get("api_secret")
+            if not all([appid, api_key, api_secret]):
+                raise ValueError("讯飞配置缺失：需设置 IFLYTEK_APPID, IFLYTEK_API_KEY, IFLYTEK_API_SECRET")
+
+            return IflytekSTTStream(
+                on_partial=on_partial,
+                on_final=on_final,
+                appid=appid,
+                api_key=api_key,
+                api_secret=api_secret,
+                hosturl=config.get("hosturl", "wss://iat-api.xfyun.cn/v2/iat"),
+                language=config.get("language", "zh_cn"),
+                accent=config.get("accent", "mandarin"),
+                ptt=config.get("ptt", 1),
+                rlang=config.get("rlang", "en_us"),
+                sample_rate=config.get("sample_rate", 16000),
+                debug=config.get("debug", False),
+            )
+        except ImportError as e:
+            raise ImportError(f"讯飞依赖缺失: {e}")
+        except Exception as e:
+            raise Exception(f"创建讯飞 STT失败: {e}")
     
     @staticmethod
     def get_available_engines() -> Dict[STTEngine, Dict[str, Any]]:
@@ -193,6 +231,22 @@ class STTFactory:
                 "available": False,
                 "error": "Deepgram模块导入失败",
                 "description": "Deepgram Speech-to-Text"
+            }
+        
+        # 检查iFlytek STT
+        try:
+            from iflytek_asr import IFLYTEK_WS_AVAILABLE
+            engines[STTEngine.IFLYTEK] = {
+                "available": bool(IFLYTEK_WS_AVAILABLE),
+                "version": "websocket v2",
+                "config_valid": bool(Config.IFLYTEK_APPID and Config.IFLYTEK_API_KEY and Config.IFLYTEK_API_SECRET),
+                "description": "iFlytek (科大讯飞) 实时转写"
+            }
+        except ImportError:
+            engines[STTEngine.IFLYTEK] = {
+                "available": False,
+                "error": "讯飞模块导入失败",
+                "description": "iFlytek (科大讯飞) 实时转写"
             }
         
         return engines
