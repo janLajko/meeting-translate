@@ -48,7 +48,7 @@ class IflytekSTTStream(STTStreamBase):
         accent: str = "mandarin",
         ptt: int = 1,
         rlang: str = "en_us",
-        vad_eos: int = 10000,
+        vad_eos: int = 1000,
         vinfo: int = 1,
         dwa: str = "wpgs",
         sample_rate: int = 16000,
@@ -86,6 +86,8 @@ class IflytekSTTStream(STTStreamBase):
         # 文本聚合
         self._agg_text = ""
         self._last_partial = ""
+        # 动态纠错(PGS)累积段
+        self._pgs_segments = []  # [{"sn": int, "text": str}]
 
         # 统计
         self._bytes_sent_total = 0
@@ -360,8 +362,8 @@ class IflytekSTTStream(STTStreamBase):
             # 简单语言检测：含中文则 zh-CN，否则 en-US
             language_code = self._detect_lang(text)
 
-            # 聚合：讯飞可能按增量发送，pgs=apd 表示追加，rpl 表示替换一段
-            self._agg_text = self._update_aggregate_text(self._agg_text, result)
+            # 聚合：使用PGS(rpl/apd)与sn/range来稳定拼接，避免重复
+            self._agg_text = self._aggregate_pgs(result)
 
             # 发送 partial
             current_partial = self._agg_text or text
@@ -369,14 +371,15 @@ class IflytekSTTStream(STTStreamBase):
                 self._handle_partial_result(current_partial, language_code)
                 self._last_partial = current_partial
 
-            # 最后一帧，发送 final
-            if status == 2:
+            # 最后一帧，发送 final（或 result.ls=True）
+            if status == 2 or result.get('ls') is True:
                 final_text = self._agg_text or text
                 if final_text.strip():
                     self._handle_final_result(final_text, language_code)
                 # 为下一段重置
                 self._agg_text = ""
                 self._last_partial = ""
+                self._pgs_segments = []
 
         except Exception as e:
             self._handle_error(e, "处理消息")
@@ -416,6 +419,38 @@ class IflytekSTTStream(STTStreamBase):
             return current
         except Exception:
             return current
+
+    def _aggregate_pgs(self, result: Dict[str, Any]) -> str:
+        """基于PGS的稳健聚合，消除重复
+        - 使用 sn 作为序号
+        - pgs=apd 追加；pgs=rpl 根据 rg 范围移除后再追加
+        """
+        try:
+            text = self._parse_result_text(result)
+            if not text:
+                # 如果解析不到文本，返回现有聚合
+                return "".join(seg.get('text', '') for seg in sorted(self._pgs_segments, key=lambda s: s.get('sn', 0)))
+
+            sn = result.get('sn')
+            pgs = result.get('pgs')
+            rg = result.get('rg', [])
+
+            # 当rpl时，删除rg范围内的段
+            if pgs == 'rpl' and isinstance(rg, list) and len(rg) == 2:
+                start, end = rg
+                self._pgs_segments = [seg for seg in self._pgs_segments if not (isinstance(seg.get('sn'), int) and start <= seg['sn'] <= end)]
+
+            # 删除同sn旧段，插入新段
+            self._pgs_segments = [seg for seg in self._pgs_segments if seg.get('sn') != sn]
+            self._pgs_segments.append({'sn': sn if isinstance(sn, int) else (self._pgs_segments[-1]['sn'] + 1 if self._pgs_segments else 0), 'text': text})
+
+            # 排序并拼接
+            self._pgs_segments.sort(key=lambda s: s.get('sn', 0))
+            agg = "".join(seg['text'] for seg in self._pgs_segments if seg.get('text'))
+            return agg
+        except Exception:
+            # 兜底：回退到简单拼接（不建议，但防止异常时中断）
+            return (self._agg_text or "") + self._parse_result_text(result)
 
     def _detect_lang(self, text: str) -> str:
         if any('\u4e00' <= ch <= '\u9fff' for ch in text):
