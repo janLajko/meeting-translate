@@ -105,20 +105,26 @@ class GoogleSTTStream(STTStreamBase):
         return self.connect()
 
     def _create_streaming_config(self):
-        """创建Google STT配置"""
-        config = speech.RecognitionConfig(
+        """创建Google STT配置（单语或可选多语）"""
+        config_kwargs = dict(
             encoding=ASR_ENCODING,
             sample_rate_hertz=self.sample_rate,
             language_code=self.language,
-            alternative_language_codes=self._alt_langs,
             enable_automatic_punctuation=True,
-            model="latest_long",  # 恢复多语言支持
+            model="latest_long",
             use_enhanced=True,
             enable_word_time_offsets=True,
             enable_word_confidence=True,
             max_alternatives=1,
-            audio_channel_count=1  # 修正为单声道
+            audio_channel_count=1,
         )
+
+        # 仅当明确提供时才设置 alternative_language_codes
+        if getattr(self, "_alt_langs", None):
+            if isinstance(self._alt_langs, list) and len(self._alt_langs) > 0:
+                config_kwargs["alternative_language_codes"] = self._alt_langs
+
+        config = speech.RecognitionConfig(**config_kwargs)
         
         return speech.StreamingRecognitionConfig(
             config=config,

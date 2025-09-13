@@ -696,8 +696,8 @@ let subtitleHistory = []; // 缓存最近3条 isFinal=true 的字幕
 let currentPartialSubtitle = null; // 当前显示的部分结果
 let lastPartialText = ''; // 最后的部分结果文本
 
-function renderLine({ en, zh, isFinal }) {
-  console.log('[Content] 🎨 Rendering subtitle line:', { en, zh, isFinal });
+function renderLine({ en, zh, isFinal, display }) {
+  console.log('[Content] 🎨 Rendering subtitle line:', { en, zh, isFinal, display });
   
   if (!container) {
     console.warn('[Content] ⚠️ Container not found, recreating...');
@@ -710,7 +710,7 @@ function renderLine({ en, zh, isFinal }) {
     return;
   }
   
-  const subtitleText = zh || en || "";
+  const subtitleText = (display === 'en') ? (en || zh || "") : (zh || en || "");
   
   if (isFinal) {
     // 处理最终结果

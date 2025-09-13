@@ -93,6 +93,20 @@ async def stream(ws: WebSocket):
     await ws.accept()
     print("[Backend] ✅ WebSocket connection accepted")
     
+    # 从查询参数读取模式：en2zh 或 zh2en（默认 en2zh）
+    try:
+        mode_param = ws.query_params.get('mode') if hasattr(ws, 'query_params') else None
+        stt_lang_param = ws.query_params.get('stt_lang') if hasattr(ws, 'query_params') else None
+    except Exception:
+        mode_param = None
+        stt_lang_param = None
+    translate_mode = (mode_param or 'en2zh').lower()
+    if translate_mode not in ('en2zh', 'zh2en'):
+        translate_mode = 'en2zh'
+    print(f"[Backend] 🎛️ Translate mode: {translate_mode}")
+    if stt_lang_param:
+        print(f"[Backend] 🎙️ STT language from client: {stt_lang_param}")
+    
     # 连接统计
     connection_start_time = time.time()
     last_heartbeat = time.time()
@@ -253,25 +267,29 @@ async def stream(ws: WebSocket):
             
             start_time = time.time()
             
-            # 智能翻译决策 - 使用双重验证
-            if final_language.startswith('zh') or has_chinese:
-                # 中文内容翻译为英文
-                zh_text = await translate_zh_to_en_async(text, max_retries=2)
-                print(f"[Backend] 🇨🇳 Chinese content detected - translating to English: '{text}' -> '{zh_text}'")
-                detection_info = f"Lang:{final_language}, Chars:{has_chinese}"
-                print(f"[Backend] 🔍 Chinese detection details: {detection_info}")
-            else:
-                # 英文或其他语言，进行翻译
-                print(f"[Backend] 🇺🇸 Non-Chinese content - translating to Chinese: '{text[:30]}...'")
-                zh_text = await translate_en_to_zh_async(text, max_retries=2)
+            # 翻译方向由插件模式决定（不再依赖自动语言检测）
+            if translate_mode == 'en2zh':
+                # 识别英文 -> 翻译中文
+                translated = await translate_en_to_zh_async(text, max_retries=2)
                 elapsed_time = time.time() - start_time
-                print(f"[Backend] ✅ Translation completed in {elapsed_time:.2f}s: '{text}' -> '{zh_text}'")
+                print(f"[Backend] 🇺🇸 EN→ZH done in {elapsed_time:.2f}s: '{text}' -> '{translated}'")
+                display_lang = 'zh'
+                payload_en = text
+                payload_zh = translated
+            else:
+                # 识别中文 -> 翻译英文
+                translated = await translate_zh_to_en_async(text, max_retries=2)
+                elapsed_time = time.time() - start_time
+                print(f"[Backend] 🇨🇳 ZH→EN done in {elapsed_time:.2f}s: '{text}' -> '{translated}'")
+                display_lang = 'en'
+                payload_en = translated
+                payload_zh = text
             
             # 去重检查 - 避免发送相同的翻译结果
-            translation_key = f"{text.strip()}_{zh_text.strip()}"
+            translation_key = f"{text.strip()}_{(payload_zh if translate_mode=='en2zh' else payload_en).strip()}"
             if translation_key == last_sent_translation:
                 if not is_final:
-                    print(f"[Backend] 🔄 Skipping duplicate translation result: '{zh_text[:30]}...'")
+                    print(f"[Backend] 🔄 Skipping duplicate translation result")
                     return
                 else:
                     pass
@@ -279,7 +297,12 @@ async def stream(ws: WebSocket):
             last_sent_translation = translation_key
             
             # 发送结果
-            data = json.dumps({"en": text, "zh": zh_text, "isFinal": is_final}, ensure_ascii=False)
+            data = json.dumps({
+                "en": payload_en,
+                "zh": payload_zh,
+                "isFinal": is_final,
+                "display": display_lang
+            }, ensure_ascii=False)
             message_queue.append(('send', data))
             
             # 增强日志记录
@@ -299,13 +322,17 @@ async def stream(ws: WebSocket):
                 final_status = "FINAL" if is_final else "PARTIAL"
                 print(f"[Backend] ❌ Smart translation failed after {max_retries + 1} attempts, sending original text - Status: {final_status}")
                 # 发送原文作为最后选择
-                data = json.dumps({"en": text, "zh": text, "isFinal": is_final}, ensure_ascii=False)
+                # 失败时仍按显示语言输出
+                if translate_mode == 'en2zh':
+                    data = json.dumps({"en": text, "zh": text, "isFinal": is_final, "display": "zh"}, ensure_ascii=False)
+                else:
+                    data = json.dumps({"en": text, "zh": text, "isFinal": is_final, "display": "en"}, ensure_ascii=False)
                 message_queue.append(('send', data))
 
     # 显示STT引擎状态
     STTFactory.print_engine_status()
     
-    print(f"[Backend] Creating STT stream using {Config.get_stt_engine().value} engine...")
+    print(f"[Backend] Creating STT stream using GOOGLE engine (single-language)")
     stt = None
     stt_rebuild_count = 0
     max_rebuild_attempts = 5
@@ -321,9 +348,18 @@ async def stream(ws: WebSocket):
             print(f"[Backend] Creating STT stream (attempt {stt_rebuild_count})")
             
             # 使用工厂模式创建STT流
+            if stt_lang_param:
+                primary_lang = stt_lang_param
+            else:
+                primary_lang = 'en-US' if translate_mode == 'en2zh' else 'zh-CN'
+            alt_langs = []  # 按需仅识别单一语种
+
             stt = create_stt_stream(
                 on_partial=on_partial,
                 on_final=on_final,
+                engine="google",
+                language=primary_lang,
+                alternative_languages=alt_langs,
                 debug=Config.DEBUG_MODE
             )
             

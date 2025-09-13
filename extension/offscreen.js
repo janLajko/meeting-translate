@@ -253,9 +253,14 @@ chrome.runtime.onMessage.addListener(async (message) => {
       //   ? "ws://localhost:8080/stream"
       //   : "ws://localhost:8080/stream";
 
+      // 通过查询参数传递模式与STT语言：
+      // - mode: en2zh 或 zh2en（翻译方向）
+      // - stt_lang: Google STT识别语言（单语言识别）
+      const mode = 'en2zh';
+      const sttLang = 'en-US'; // 本插件版本专注识别英文
       wsUrl = location.hostname === 'localhost' 
-        ? "ws://localhost:8080/stream"
-        : "wss://meeting-translate-1019079553349.asia-east2.run.app/stream";
+        ? `ws://localhost:8080/stream?mode=${mode}&stt_lang=${encodeURIComponent(sttLang)}`
+        : `wss://meeting-translate-1019079553349.asia-east2.run.app/stream?mode=${mode}&stt_lang=${encodeURIComponent(sttLang)}`;
       currentStreamId = message.streamId;
       
       // 重置重连状态
