@@ -106,18 +106,37 @@ class GoogleSTTStream(STTStreamBase):
 
     def _create_streaming_config(self):
         """创建Google STT配置（单语或可选多语）"""
-        config_kwargs = dict(
-            encoding=ASR_ENCODING,
-            sample_rate_hertz=self.sample_rate,
-            language_code=self.language,
-            enable_automatic_punctuation=True,
-            model="latest_long",
-            use_enhanced=True,
-            enable_word_time_offsets=True,
-            enable_word_confidence=True,
-            max_alternatives=1,
-            audio_channel_count=1,
-        )
+        # 根据语言选择合适的模型和配置
+        # 中文相关的语言代码列表
+        chinese_languages = ['zh-CN', 'cmn-Hans-CN', 'cmn-Hans-HK', 'cmn-Hans-TW', 
+                            'cmn-Hant-TW', 'yue-Hant-HK']
+        
+        if self.language in chinese_languages or self.language.startswith('zh') or 'cmn' in self.language:
+            # 中文相关语言使用 command_and_search 模型，且必须设置 use_enhanced=False
+            config_kwargs = dict(
+                encoding=ASR_ENCODING,
+                sample_rate_hertz=self.sample_rate,
+                language_code=self.language,
+                enable_automatic_punctuation=True,
+                model="command_and_search",
+                use_enhanced=False,  # 中文必须为 False
+                max_alternatives=1,
+                audio_channel_count=1,
+            )
+        else:
+            # 其他语言使用 latest_long 模型和完整配置
+            config_kwargs = dict(
+                encoding=ASR_ENCODING,
+                sample_rate_hertz=self.sample_rate,
+                language_code=self.language,
+                enable_automatic_punctuation=True,
+                model="latest_long",
+                use_enhanced=True,
+                enable_word_time_offsets=True,
+                enable_word_confidence=True,
+                max_alternatives=1,
+                audio_channel_count=1,
+            )
 
         # 仅当明确提供时才设置 alternative_language_codes
         if getattr(self, "_alt_langs", None):

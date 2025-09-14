@@ -1,0 +1,27 @@
+{
+    "manifest_version": 3,
+    "name": "Live Meeting Subtitles (ZH→EN)",
+    "version": "0.1.0",
+    "description": "Capture audio from meeting platforms (Gather.town, Zep.us, YouTube), send to backend for STT+translation, overlay subtitles.",
+    "permissions": ["tabCapture", "activeTab", "scripting", "offscreen"],
+    "host_permissions": ["*://*/*"],
+    "background": { "service_worker": "background.js" },
+    "content_scripts": [
+      {
+        "matches": ["*://*.gather.town/*", "*://gather.town/*", "*://*.youtube.com/*", "*://youtube.com/*", "*://*.zep.us/*", "*://zep.us/*", "*://meet.google.com/*", "*://*.meet.google.com/*"],
+        "js": ["content.js"],
+        "css": ["overlay.css"],
+        "run_at": "document_idle"
+      }
+    ],
+    "action": {
+      "default_title": "Start/Stop Subtitles"
+    },
+    "web_accessible_resources": [
+      {
+        "resources": ["pcm-worklet.js"],
+        "matches": ["<all_urls>"]
+      }
+    ]
+}
+  

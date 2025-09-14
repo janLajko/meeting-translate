@@ -88,6 +88,8 @@ setTimeout(() => {
 const containerId = "__gather_subtitles_container__";
 const toggleButtonId = "__gather_subtitles_toggle__";
 let container = document.getElementById(containerId);
+let historyContainer = null;   // 仅显示目标语种（display指示）的历史行
+let currentContainer = null;   // 只显示源语种的“最新一行”
 let toggleButton = null;
 let subtitlesVisible = localStorage.getItem('gather_subtitles_visible') !== 'false'; // 默认显示
 
@@ -127,6 +129,17 @@ function createSubtitleContainer() {
   `;
   
   document.body.appendChild(container);
+  
+  // 创建两个子容器：历史区 + 当前区
+  historyContainer = document.createElement('div');
+  historyContainer.id = '__gather_subtitles_history__';
+  historyContainer.className = 'subs-history';
+  container.appendChild(historyContainer);
+
+  currentContainer = document.createElement('div');
+  currentContainer.id = '__gather_subtitles_current__';
+  currentContainer.className = 'subs-current';
+  container.appendChild(currentContainer);
   console.log('[Content] ✅ Subtitle container created and added to body');
   console.log('[Content] Container element:', container);
   console.log('[Content] Container computed style:', getComputedStyle(container));
@@ -692,9 +705,14 @@ console.log('[Content] 🚀 Content script initialized and ready');
 let currentSubtitle = null;
 let subtitleTimeout = null;
 let lastSubtitleText = '';
-let subtitleHistory = []; // 缓存最近3条 isFinal=true 的字幕
+let subtitleHistory = []; // 兼容保留，内部不再直接渲染
 let currentPartialSubtitle = null; // 当前显示的部分结果
 let lastPartialText = ''; // 最后的部分结果文本
+
+// 新的渲染状态：
+let targetHistory = [];       // 保存翻译后的中文最终结果，最多3条
+let currentSourceText = '';   // 当前正在识别的英文文本
+let currentDisplay = 'zh';    // 显示语言（本插件为 zh）
 
 function renderLine({ en, zh, isFinal, display }) {
   console.log('[Content] 🎨 Rendering subtitle line:', { en, zh, isFinal, display });
@@ -710,54 +728,31 @@ function renderLine({ en, zh, isFinal, display }) {
     return;
   }
   
-  const subtitleText = (display === 'en') ? (en || zh || "") : (zh || en || "");
+  // en-zh插件: 历史显示中文翻译，当前显示英文识别
+  const translatedText = zh || '';  // 翻译后的中文
+  const sourceText = en || '';      // 正在识别的英文
   
   if (isFinal) {
-    // 处理最终结果
-    console.log('[Content] ✅ Processing final result:', subtitleText.substring(0, 30));
-    
-    // 防止重复显示相同内容
-    if (subtitleText === lastSubtitleText) {
-      console.log('[Content] 🔄 Skipping duplicate final subtitle:', subtitleText);
-      return;
+    // 最终结果：只有中文翻译才加入历史
+    if (translatedText && translatedText.trim() && translatedText !== sourceText) {
+      // 简单检测是否包含中文字符
+      const hasChinese = /[一-龥]/.test(translatedText);
+      if (hasChinese && translatedText !== lastSubtitleText) {
+        console.log('[Content] Adding to history (Chinese):', translatedText);
+        targetHistory.push(translatedText);
+        if (targetHistory.length > 3) targetHistory.shift();
+        lastSubtitleText = translatedText;
+      }
     }
-    
-    // 添加到历史缓存
-    subtitleHistory.push({
-      text: subtitleText,
-      timestamp: Date.now(),
-      en: en || "",
-      zh: zh || "",
-      isFinal: true
-    });
-    
-    // 保持历史缓存最多3条
-    if (subtitleHistory.length > 3) {
-      subtitleHistory.shift(); // 移除最旧的
-    }
-    
-    console.log(`[Content] 📚 Updated subtitle history (${subtitleHistory.length}/3):`, 
-                subtitleHistory.map(s => s.text.substring(0, 20) + '...'));
-    
-    // 清除当前的部分结果
-    currentPartialSubtitle = null;
+    // 无论是否有翻译，final时都清空当前识别
+    currentSourceText = '';
     lastPartialText = '';
-    
-    // 更新状态
-    lastSubtitleText = subtitleText;
-    
   } else {
-    // 处理部分结果
-    console.log('[Content] ⏳ Processing partial result:', subtitleText.substring(0, 30));
-    
-    // 防止重复显示相同的部分结果
-    if (subtitleText === lastPartialText) {
-      console.log('[Content] 🔄 Skipping duplicate partial subtitle:', subtitleText);
-      return;
+    // partial：更新当前识别的英文
+    if (sourceText && sourceText !== lastPartialText) {
+      currentSourceText = sourceText;
+      lastPartialText = sourceText;
     }
-    
-    // 更新部分结果状态
-    lastPartialText = subtitleText;
   }
   
   // 清除现有的定时器
@@ -765,8 +760,8 @@ function renderLine({ en, zh, isFinal, display }) {
     clearTimeout(subtitleTimeout);
   }
   
-  // 渲染所有字幕（历史 + 当前）
-  renderSubtitlesWithCurrent(subtitleText, isFinal);
+  // 渲染：仅保留翻译语言
+  renderSeparatedSubtitles();
   
   // 自动滚动到底部显示最新内容 - 改进版本
   if (container) {
@@ -788,7 +783,7 @@ function renderLine({ en, zh, isFinal, display }) {
     }, 50); // 短暂延迟确保内容已渲染
   }
   
-  console.log(`[Content] 📍 Rendered subtitles - Final: ${isFinal}, Current: ${subtitleText.substring(0, 50)}`);
+  console.log(`[Content] 📍 Rendered separated subtitles - Final: ${isFinal}`);
   
   // 设置字幕自动消失（15秒后）
   subtitleTimeout = setTimeout(() => {
@@ -797,99 +792,57 @@ function renderLine({ en, zh, isFinal, display }) {
 }
 
 // 新函数：渲染字幕历史和当前字幕
-function renderSubtitlesWithCurrent(currentText, isFinal) {
-  if (!container) return;
-  
-  // 清空容器
-  container.innerHTML = '';
-  
-  // 1. 渲染历史字幕（只显示前面的，不包括最新的最终结果）
-  const displayHistory = isFinal ? subtitleHistory.slice(0, -1) : subtitleHistory;
-  
-  displayHistory.forEach((subtitle, index) => {
-    const line = document.createElement("div");
-    const isOldest = index === 0 && displayHistory.length > 1;
-    
-    // 历史字幕样式
-    let opacity, fontSize, fontWeight;
-    if (displayHistory.length === 1) {
-      opacity = '0.8';
-      fontSize = '18px';
-      fontWeight = '450';
-    } else if (isOldest) {
-      opacity = '0.6';
-      fontSize = '16px';
-      fontWeight = '400';
-    } else {
-      opacity = '0.8';
-      fontSize = '18px';
-      fontWeight = '450';
+function renderSeparatedSubtitles() {
+  if (!container || !historyContainer || !currentContainer) return;
+
+  // 历史（显示翻译后的中文）
+  historyContainer.innerHTML = '';
+  targetHistory.forEach((text, idx) => {
+    // 二次验证：确保只显示中文
+    const hasChinese = /[一-龥]/.test(text);
+    if (!hasChinese) {
+      console.warn('[Content] Skipping non-Chinese text in history:', text);
+      return;
     }
     
-    line.className = `subtitle-line history ${isOldest ? 'first' : ''}`;
+    const line = document.createElement('div');
+    line.className = 'subtitle-line history';
     line.style.cssText = `
-      margin: 2px 0 !important;
-      line-height: 1.3 !important;
+      margin: 4px 0 !important;
+      padding: 8px 12px !important;
+      background: rgba(0,0,0,0.6) !important;
+      border-radius: 6px !important;
+      opacity: ${idx === targetHistory.length - 1 ? '1' : '0.7'} !important;
+    `;
+    line.innerHTML = `<div class="zh" style="
+      font-size: 20px !important;
       color: #fff !important;
-      text-shadow: 0 1px 2px rgba(0,0,0,0.7) !important;
-      background: rgba(0,0,0,${isOldest ? '0.4' : '0.5'}) !important;
-      padding: ${isOldest ? '4px 8px' : '6px 10px'} !important;
-      border-radius: 8px !important;
-      border: 1px solid rgba(255,255,255,0.08) !important;
-      opacity: ${opacity} !important;
-      transition: all 0.3s ease !important;
-    `;
-    
-    line.innerHTML = `
-      <div class="zh" style="
-        font-size: ${fontSize} !important; 
-        font-weight: ${fontWeight} !important; 
-        margin: 0 !important; 
-        line-height: 1.5 !important; 
-        text-align: center !important; 
-        letter-spacing: 0.5px !important;
-        color: rgba(255,255,255,0.9) !important;
-      ">${escapeHtml(subtitle.text)}</div>
-    `;
-    
-    container.appendChild(line);
+      text-align: center !important;
+      line-height: 1.4 !important;
+    ">${escapeHtml(text)}</div>`;
+    historyContainer.appendChild(line);
   });
-  
-  // 2. 渲染当前字幕（最终结果或部分结果）
-  if (currentText && currentText.trim()) {
-    const currentLine = document.createElement("div");
-    const isPartial = !isFinal;
-    
-    currentLine.className = `subtitle-line ${isPartial ? 'partial' : 'current'}`;
-    currentLine.style.cssText = `
-      margin: ${isPartial ? '4px 0' : '8px 0'} !important;
-      line-height: 1.3 !important;
-      color: #fff !important;
-      text-shadow: 0 1px 2px rgba(0,0,0,0.7) !important;
-      background: rgba(0,0,0,${isPartial ? '0.65' : '0.7'}) !important;
-      padding: ${isPartial ? '8px 12px' : '12px 16px'} !important;
+
+  // 当前（显示正在识别的英文）
+  currentContainer.innerHTML = '';
+  if (currentSourceText && currentSourceText.trim()) {
+    const line = document.createElement('div');
+    line.className = 'subtitle-line current';
+    line.style.cssText = `
+      margin: 8px 0 4px 0 !important;
+      padding: 10px 14px !important;
+      background: rgba(0,0,0,0.75) !important;
       border-radius: 8px !important;
-      border: ${isPartial ? '2px dashed rgba(255,255,255,0.3)' : '1px solid rgba(255,255,255,0.15)'} !important;
-      opacity: 1 !important;
-      animation: ${isPartial ? 'pulse 1.5s ease-in-out infinite alternate' : 'fadeIn 0.3s ease-in'} !important;
-      transition: all 0.3s ease !important;
-      box-shadow: ${isPartial ? '0 0 10px rgba(255,255,255,0.1)' : '0 2px 8px rgba(0,0,0,0.3)'} !important;
+      border: 1px solid rgba(255,255,255,0.2) !important;
     `;
-    
-    currentLine.innerHTML = `
-      <div class="zh" style="
-        font-size: 22px !important; 
-        font-weight: ${isPartial ? '500' : '600'} !important; 
-        margin: 0 !important; 
-        line-height: 1.5 !important; 
-        text-align: center !important; 
-        letter-spacing: 0.5px !important;
-        color: ${isPartial ? 'rgba(255,255,255,0.95)' : '#fff'} !important;
-      ">${escapeHtml(currentText)}</div>
-    `;
-    
-    container.appendChild(currentLine);
-    currentPartialSubtitle = currentLine;
+    line.innerHTML = `<div class="en" style="
+      font-size: 18px !important;
+      color: rgba(255,255,255,0.9) !important;
+      text-align: center !important;
+      line-height: 1.3 !important;
+      font-style: italic !important;
+    ">${escapeHtml(currentSourceText)}</div>`;
+    currentContainer.appendChild(line);
   }
 }
 
@@ -964,24 +917,16 @@ function renderSubtitleHistory() {
 
 // 新函数：清空所有字幕
 function clearAllSubtitles() {
-  if (container) {
-    // 添加淡出动画
-    const lines = container.querySelectorAll('.subtitle-line');
-    lines.forEach(line => {
-      line.style.animation = 'fadeOut 0.3s ease-out';
-    });
-    
-    setTimeout(() => {
-      container.innerHTML = '';
-      console.log('[Content] 🗑️ All subtitles auto-removed after timeout');
-    }, 300);
-  }
+  if (historyContainer) historyContainer.innerHTML = '';
+  if (currentContainer) currentContainer.innerHTML = '';
   
   // 清理所有状态
   currentSubtitle = null;
   currentPartialSubtitle = null;
   lastSubtitleText = '';
   lastPartialText = '';
+  currentSourceText = '';
+  targetHistory = [];  // 清空历史记录
 }
 
 function escapeHtml(s) {

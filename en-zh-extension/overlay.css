@@ -28,6 +28,47 @@ html body #__gather_subtitles_container__ {
     scroll-behavior: smooth !important;
 }
 
+/* 新布局：历史区 + 当前区 */
+html body #__gather_subtitles_history__ {
+    margin-bottom: 8px !important;
+}
+
+html body #__gather_subtitles_current__ {}
+
+/* 历史行（仅目标语种） */
+html body #__gather_subtitles_container__ .subtitle-line.history {
+    margin: 4px 0 !important;
+    background: rgba(0,0,0,0.55) !important;
+    border: 1px solid rgba(255,255,255,0.1) !important;
+    padding: 6px 10px !important;
+}
+
+/* 当前行（仅源语种，较大） */
+html body #__gather_subtitles_container__ .subtitle-line.current {
+    margin: 6px 0 !important;
+    background: rgba(0,0,0,0.75) !important;
+    border: 1px solid rgba(255,255,255,0.15) !important;
+    padding: 12px 16px !important;
+}
+
+/* 目标语种中文样式（历史） */
+html body #__gather_subtitles_container__ .subtitle-line.history .zh {
+    font-size: 20px !important;
+    font-weight: 500 !important;
+}
+
+/* 当前源语种英文样式（更大更粗） */
+html body #__gather_subtitles_container__ .subtitle-line.current .en {
+    font-size: 28px !important;
+    font-weight: 700 !important;
+}
+
+/* 当前源语种中文样式（在zh→en时显示中文原文） */
+html body #__gather_subtitles_container__ .subtitle-line.current .zh {
+    font-size: 26px !important;
+    font-weight: 700 !important;
+}
+
 /* 自定义滚动条样式 - WebKit浏览器 */
 html body #__gather_subtitles_container__::-webkit-scrollbar {
     width: 6px !important;
